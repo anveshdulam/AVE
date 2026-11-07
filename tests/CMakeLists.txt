@@ -38,6 +38,13 @@ if(TARGET ave_playback)
     set_tests_properties(StreamDecoderTest PROPERTIES ENVIRONMENT "PATH=D:/DevTools/ffmpeg/bin;$ENV{PATH}")
 endif()
 
+if(TARGET ave_audio)
+    add_executable(ave_audio_engine_test audio_engine_test.cpp)
+    target_link_libraries(ave_audio_engine_test PRIVATE ave_audio ave_core)
+    target_compile_features(ave_audio_engine_test PRIVATE cxx_std_20)
+    add_test(NAME AudioEngineTest COMMAND ave_audio_engine_test)
+endif()
+
 if(TARGET ave_media)
     add_executable(ave_ffmpeg_probe_test ffmpeg_probe_test.cpp)
     target_link_libraries(ave_ffmpeg_probe_test PRIVATE ave_media ave_core)

@@ -1,4 +1,5 @@
 add_subdirectory(playback)
+add_subdirectory(audio)
 
 if(AVE_BUILD_VULKAN_PROBE)
     find_package(Vulkan MODULE QUIET)

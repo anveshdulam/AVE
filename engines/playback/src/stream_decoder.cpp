@@ -307,3 +307,4 @@ std::optional<VideoFrame> StreamDecoder::decode_next_frame(uint64_t seek_generat
 }
 
 } // namespace ave
+

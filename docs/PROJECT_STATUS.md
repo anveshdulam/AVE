@@ -41,11 +41,15 @@
 | Playback Controller & A/V Sync | **Complete** | `ave::PlaybackController` (action evaluation: Present/Hold/Drop/Stale, seek generation tokens) |
 | Stream Video Decoder | **Complete** | `ave::StreamDecoder` (frame-accurate keyframe seeking, RGBA scaling via swscale, exact rational PTS) |
 | Timeline Prefetch Worker | **Complete** | `ave::TimelinePrefetcher` (asynchronous background prefetcher, gap handling, instant seek cancellation) |
+| Real-Time Audio Buffer & Limiter | **Complete** | `ave::AudioBuffer` (pre-allocated multi-channel float buffer, gain, RMS/peak metering, soft limiter) |
+| Lock-Free Audio RingBuffer | **Complete** | `ave::AudioRingBuffer` (SPSC lock-free circular buffer, zero-alloc audio callback, underrun silence fill) |
+| Multi-Track Audio Mixer | **Complete** | `ave::AudioMixer` (sample-accurate mixing, constant-power panning, track solo/mute routing) |
+| Audio Device Abstraction | **Complete** | `ave::AudioDevice`, `ave::NullAudioDevice` (deterministic callback loop, underrun tracking) |
 
 ---
 
 ## Test Verification Summary
-All 9 automated tests pass 100% via CTest:
+All 10 automated tests pass 100% via CTest:
 1. `VulkanProbeTest` — Physical GPU enumeration (Intel Arc Graphics 0x7d55, Vulkan 1.4.325)
 2. `SmokeTest` — Canonical rational time arithmetic & frame conversion
 3. `MediaAssetTest` — UUID generation, stream mapping, JSON serialization round-trip
@@ -53,8 +57,9 @@ All 9 automated tests pass 100% via CTest:
 5. `TimelineTest` — Multi-track timeline, item placement, overlap prevention, active item query, blade cut, and JSON roundtrip
 6. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
 7. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
-8. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
-9. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
+8. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
+9. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
+10. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
 
 ---
 
