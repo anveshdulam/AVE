@@ -10,6 +10,7 @@ add_library(ave_core STATIC
     include/ave/media_asset.hpp
     include/ave/media_pool.hpp
     include/ave/timeline.hpp
+    include/ave/video_frame.hpp
 )
 
 target_include_directories(ave_core PUBLIC

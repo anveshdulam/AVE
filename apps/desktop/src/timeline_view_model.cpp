@@ -156,3 +156,4 @@ void TimelineViewModel::notify_changed() {
 }
 
 } // namespace ave
+

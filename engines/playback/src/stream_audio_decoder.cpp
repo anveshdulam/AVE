@@ -269,3 +269,4 @@ std::optional<AudioBuffer> StreamAudioDecoder::decode_next_audio() {
 }
 
 } // namespace ave
+

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ave/time.hpp"
+#include "ave/video_frame.hpp"
 
 #include <vector>
 #include <deque>
@@ -11,23 +12,6 @@
 #include <cstdint>
 
 namespace ave {
-
-/**
- * @brief Decoded video frame ready for presentation.
- */
-struct VideoFrame {
-    uint64_t seek_generation{0};
-    Rational pts{0, 1};
-    Rational duration{0, 1};
-    int width{0};
-    int height{0};
-    std::vector<uint8_t> rgba_data{};
-    bool is_keyframe{false};
-
-    [[nodiscard]] Rational pts_end() const noexcept {
-        return pts + duration;
-    }
-};
 
 /**
  * @brief Thread-safe bounded queue enforcing backpressure on upstream decoders.

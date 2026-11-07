@@ -1,9 +1,9 @@
 # Autonomous Video Editor — Project Status
 
 ## Project Baseline
-- **Milestone:** Phase 2 — Real-Time Playback & Timeline Engine (Complete)
+- **Milestone:** Phase 3 — GPU Render Graph & Vulkan Compositor (In Progress)
 - **Date:** 2026-11-07
-- **Architecture Status:** 5-layer system and ADRs 0001–0006 established.
+- **Architecture Status:** 5-layer system and ADRs 0001–0007 established.
 - **Hardware Profile (Audited):**
   - CPU: Intel(R) Core(TM) Ultra 5 125H (14 cores: 4P + 8E + 2LPE, 18 logical threads)
   - RAM: 16 GB LPDDR5X (7467 MT/s)
@@ -52,11 +52,19 @@
 | Desktop Application Shell | **Complete** | `apps/desktop/ave_desktop.exe` (v0.1.0 application shell with `--smoke-test` and Qt-ready QML hooks) |
 | End-to-End Playback Integration Test | **Complete** | `ave_playback_integration_test` (synchronous A/V playback, seeking, scrubbing tokens, timecode) |
 | Phase 2 Exit Gate | **MET** | Complete real-time video/audio playback pipeline verified with 11/11 automated tests passing 100% |
+| **Phase 3: GPU Render Graph & Vulkan Compositor** | **IN PROGRESS** | Backend-neutral DAG compositing, affine transforms, blend modes, multi-layer timeline builder |
+| Architecture Decision Record | **Complete** | ADR-0007 (Backend-Neutral GPU Render Graph and Compositing Pipeline) |
+| Canonical VideoFrame DTO | **Complete** | `ave::VideoFrame` moved to `core/include/ave/video_frame.hpp` for universal inter-subsystem access |
+| 2D Image Buffer & Bilinear Sampler | **Complete** | `ave::RenderImage` (RGBA8, RGBA16, RGBA32, Rec709, sRGB, linear Rec709, bilinear sampling) |
+| Compositing Node Hierarchy | **Complete** | `ave::RenderNode`, `SourceNode`, `TransformNode`, `OpacityNode`, `BlendNode`, `OutputNode` |
+| Directed Acyclic Graph (DAG) Manager | **Complete** | `ave::RenderGraph` (Kahn's topological sort, cycle detection, automatic timeline graph synthesis) |
+| Porter-Duff Blend Modes | **Complete** | Alpha Over, Multiply, Screen, Add with exact math and alpha premultiplication handling |
+| 2D Affine Transformation Engine | **Complete** | Inverse transformation matrix (translation, scale, rotation around normalized anchor point) |
 
 ---
 
 ## Test Verification Summary
-All 11 automated test suites pass 100% via CTest:
+All 12 automated test suites pass 100% via CTest:
 1. `VulkanProbeTest` — Physical GPU enumeration (Intel Arc Graphics 0x7d55, Vulkan 1.4.325)
 2. `SmokeTest` — Canonical rational time arithmetic & frame conversion
 3. `MediaAssetTest` — UUID generation, stream mapping, JSON serialization round-trip
@@ -65,14 +73,14 @@ All 11 automated test suites pass 100% via CTest:
 6. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
 7. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
 8. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
-9. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
-10. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
-11. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
+9. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
+10. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
+11. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
+12. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
 
 ---
 
-## Next Milestone: Phase 3 — GPU Render Graph & Vulkan Compositor
-1. Backend-neutral render graph interface (`ave::RenderGraph`, `ave::RenderNode`, `ave::RenderResource`).
-2. Vulkan render device & command buffer management (`ave::VulkanDevice`, swapchain/offscreen surface).
-3. 2D transform, opacity, and blend modes (Over, Add, Multiply, Screen) shader pipelines (SPIR-V).
-4. Frame compositing pipeline connecting decoded timeline video frames to the render graph.
+## Next Steps in Phase 3
+1. Vulkan render device & command buffer management (`ave::VulkanDevice`, swapchain/offscreen surface).
+2. 2D transform, opacity, and blend modes (Over, Add, Multiply, Screen) shader pipelines (SPIR-V).
+3. Connect real-time playback engine frame output through `ave::RenderGraph` for interactive display.

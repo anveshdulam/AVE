@@ -82,3 +82,4 @@ void PlaybackViewModel::notify_state_changed() {
 }
 
 } // namespace ave
+

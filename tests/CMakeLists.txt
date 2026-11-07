@@ -44,6 +44,13 @@ if(TARGET ave_playback)
     set_tests_properties(PlaybackIntegrationTest PROPERTIES ENVIRONMENT "PATH=D:/DevTools/ffmpeg/bin;$ENV{PATH}")
 endif()
 
+if(TARGET ave_render)
+    add_executable(ave_render_graph_test render_graph_test.cpp)
+    target_link_libraries(ave_render_graph_test PRIVATE ave_render ave_core)
+    target_compile_features(ave_render_graph_test PRIVATE cxx_std_20)
+    add_test(NAME RenderGraphTest COMMAND ave_render_graph_test)
+endif()
+
 if(TARGET ave_audio)
     add_executable(ave_audio_engine_test audio_engine_test.cpp)
     target_link_libraries(ave_audio_engine_test PRIVATE ave_audio ave_core)
