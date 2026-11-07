@@ -222,3 +222,4 @@ void VulkanDevice::wait_idle() const {
 }
 
 } // namespace ave
+

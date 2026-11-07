@@ -191,3 +191,4 @@ void VulkanCompositor::composite(VulkanTexture* input_fg, VulkanTexture& output_
 }
 
 } // namespace ave
+

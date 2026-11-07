@@ -104,3 +104,4 @@ void main() {
 
     imageStore(u_output_image, out_coord, out_color);
 }
+
