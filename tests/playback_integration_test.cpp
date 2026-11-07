@@ -30,7 +30,7 @@ int main(int argc, char* argv[]) {
 
     std::filesystem::path fixture_path = (argc > 1) ? argv[1] : "tests/fixtures/sample_test.mp4";
     if (!std::filesystem::exists(fixture_path)) {
-        fixture_path = "D:/anvesh/AVE/tests/fixtures/sample_test.mp4";
+        fixture_path = std::filesystem::current_path() / "tests/fixtures/sample_test.mp4";
     }
 
     ASSERT_TRUE(std::filesystem::exists(fixture_path));

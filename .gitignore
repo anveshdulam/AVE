@@ -32,6 +32,7 @@ __pycache__/
 
 # Local media, test fixtures, model weights, and large binaries
 *.mp4
+!tests/fixtures/*.mp4
 *.mov
 *.mkv
 *.avi

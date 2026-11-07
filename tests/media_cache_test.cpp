@@ -20,7 +20,7 @@
 } while(0)
 
 int test_cache_store() {
-    std::filesystem::path temp_cache = "build/smoke/test_cache";
+    std::filesystem::path temp_cache = std::filesystem::temp_directory_path() / "ave_test_cache";
     ave::MediaCache cache(temp_cache);
     cache.clear();
 
