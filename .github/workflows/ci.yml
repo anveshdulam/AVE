@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ master, main ]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     runs-on: windows-latest
@@ -45,5 +49,7 @@ jobs:
           cmake --build build --config Release
 
       - name: Run CTest
+        shell: pwsh
         run: |
-          ctest --test-dir build --output-on-failure
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\Windows Error Reporting' -Name 'DontShowUI' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+          ctest --test-dir build --output-on-failure --timeout 60
