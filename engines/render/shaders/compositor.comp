@@ -1,0 +1,106 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(binding = 0, rgba8) uniform readonly image2D u_input_image;
+layout(binding = 1, rgba8) uniform image2D u_output_image;
+
+layout(push_constant) uniform PushConstants {
+    int out_width;
+    int out_height;
+    int in_width;
+    int in_height;
+
+    // 2D affine inverse transform matrix (3x2 row-major)
+    // [m00, m01, m02]
+    // [m10, m11, m12]
+    float m00; float m01; float m02;
+    float m10; float m11; float m12;
+
+    float opacity;
+    int blend_mode; // 0 = Over, 1 = Multiply, 2 = Screen, 3 = Add
+
+    int use_solid_color; // 1 = solid color mode, 0 = input image mode
+    float solid_r;
+    float solid_g;
+    float solid_b;
+    float solid_a;
+} pc;
+
+vec4 sample_bilinear(vec2 uv) {
+    if (uv.x < 0.0 || uv.x >= float(pc.in_width) || uv.y < 0.0 || uv.y >= float(pc.in_height)) {
+        return vec4(0.0);
+    }
+
+    int x0 = int(floor(uv.x));
+    int y0 = int(floor(uv.y));
+    int x1 = min(x0 + 1, pc.in_width - 1);
+    int y1 = min(y0 + 1, pc.in_height - 1);
+
+    float fx = fract(uv.x);
+    float fy = fract(uv.y);
+
+    vec4 c00 = imageLoad(u_input_image, ivec2(x0, y0));
+    vec4 c10 = imageLoad(u_input_image, ivec2(x1, y0));
+    vec4 c01 = imageLoad(u_input_image, ivec2(x0, y1));
+    vec4 c11 = imageLoad(u_input_image, ivec2(x1, y1));
+
+    vec4 top = mix(c00, c10, fx);
+    vec4 bottom = mix(c01, c11, fx);
+    return mix(top, bottom, fy);
+}
+
+void main() {
+    ivec2 out_coord = ivec2(gl_GlobalInvocationID.xy);
+    if (out_coord.x >= pc.out_width || out_coord.y >= pc.out_height) {
+        return;
+    }
+
+    vec4 fg;
+    if (pc.use_solid_color != 0) {
+        fg = vec4(pc.solid_r, pc.solid_g, pc.solid_b, pc.solid_a);
+    } else {
+        // Inverse affine transformation to find source image coordinate
+        float x = float(out_coord.x);
+        float y = float(out_coord.y);
+        vec2 src_uv;
+        src_uv.x = pc.m00 * x + pc.m01 * y + pc.m02;
+        src_uv.y = pc.m10 * x + pc.m11 * y + pc.m12;
+
+        fg = sample_bilinear(src_uv);
+    }
+
+    // Apply layer opacity
+    fg.a *= clamp(pc.opacity, 0.0, 1.0);
+
+    // Read current destination background pixel
+    vec4 bg = imageLoad(u_output_image, out_coord);
+
+    vec4 out_color;
+    // Blend modes
+    if (pc.blend_mode == 0) { // Over (premultiplied Porter-Duff)
+        float out_a = fg.a + bg.a * (1.0 - fg.a);
+        if (out_a > 0.0) {
+            vec3 rgb = (fg.rgb * fg.a + bg.rgb * bg.a * (1.0 - fg.a)) / out_a;
+            out_color = vec4(clamp(rgb, 0.0, 1.0), clamp(out_a, 0.0, 1.0));
+        } else {
+            out_color = vec4(0.0);
+        }
+    } else if (pc.blend_mode == 1) { // Multiply
+        vec3 rgb = fg.rgb * bg.rgb;
+        float out_a = max(fg.a, bg.a);
+        out_color = vec4(clamp(rgb, 0.0, 1.0), clamp(out_a, 0.0, 1.0));
+    } else if (pc.blend_mode == 2) { // Screen
+        vec3 rgb = vec3(1.0) - (vec3(1.0) - fg.rgb) * (vec3(1.0) - bg.rgb);
+        float out_a = max(fg.a, bg.a);
+        out_color = vec4(clamp(rgb, 0.0, 1.0), clamp(out_a, 0.0, 1.0));
+    } else if (pc.blend_mode == 3) { // Add
+        vec3 rgb = fg.rgb + bg.rgb;
+        float out_a = min(1.0, fg.a + bg.a);
+        out_color = vec4(clamp(rgb, 0.0, 1.0), clamp(out_a, 0.0, 1.0));
+    } else {
+        out_color = fg;
+    }
+
+    imageStore(u_output_image, out_coord, out_color);
+}

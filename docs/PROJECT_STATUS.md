@@ -54,17 +54,23 @@
 | Phase 2 Exit Gate | **MET** | Complete real-time video/audio playback pipeline verified with 11/11 automated tests passing 100% |
 | **Phase 3: GPU Render Graph & Vulkan Compositor** | **IN PROGRESS** | Backend-neutral DAG compositing, affine transforms, blend modes, multi-layer timeline builder |
 | Architecture Decision Record | **Complete** | ADR-0007 (Backend-Neutral GPU Render Graph and Compositing Pipeline) |
+| Architecture Decision Record | **Complete** | ADR-0008 (Vulkan Offscreen Hardware Device and Compute Compositing Pipeline) |
 | Canonical VideoFrame DTO | **Complete** | `ave::VideoFrame` moved to `core/include/ave/video_frame.hpp` for universal inter-subsystem access |
 | 2D Image Buffer & Bilinear Sampler | **Complete** | `ave::RenderImage` (RGBA8, RGBA16, RGBA32, Rec709, sRGB, linear Rec709, bilinear sampling) |
 | Compositing Node Hierarchy | **Complete** | `ave::RenderNode`, `SourceNode`, `TransformNode`, `OpacityNode`, `BlendNode`, `OutputNode` |
 | Directed Acyclic Graph (DAG) Manager | **Complete** | `ave::RenderGraph` (Kahn's topological sort, cycle detection, automatic timeline graph synthesis) |
 | Porter-Duff Blend Modes | **Complete** | Alpha Over, Multiply, Screen, Add with exact math and alpha premultiplication handling |
 | 2D Affine Transformation Engine | **Complete** | Inverse transformation matrix (translation, scale, rotation around normalized anchor point) |
+| Vulkan Hardware Device Context | **Complete** | `ave::VulkanDevice` (Intel Arc GPU selection, compute/graphics queue, command pool, staging commands) |
+| GPU Texture & Staging Buffers | **Complete** | `ave::VulkanTexture` (VkImage, VkImageView, memory barriers, bit-exact CPU <-> GPU staging upload & readback) |
+| GLSL Compute Shader & Embedded SPIR-V | **Complete** | `compositor.comp` compiled via glslc and embedded in C++ header `ave::shaders::compositor_comp_spv` |
+| Vulkan GPU Compositor | **Complete** | `ave::VulkanCompositor` (compute pipeline, descriptor sets, push constants, 16x16 workgroup hardware dispatch) |
+| Phase 3 Step 2 Hardware Test | **Complete** | `ave_vulkan_render_test` (Intel Arc GPU execution: bit-exact texture upload/readback, Over blend, solid color alpha) |
 
 ---
 
 ## Test Verification Summary
-All 12 automated test suites pass 100% via CTest:
+All 13 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
 1. `VulkanProbeTest` — Physical GPU enumeration (Intel Arc Graphics 0x7d55, Vulkan 1.4.325)
 2. `SmokeTest` — Canonical rational time arithmetic & frame conversion
 3. `MediaAssetTest` — UUID generation, stream mapping, JSON serialization round-trip
@@ -74,13 +80,13 @@ All 12 automated test suites pass 100% via CTest:
 7. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
 8. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
 9. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
-10. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
-11. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
-12. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
+10. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
+11. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
+12. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
+13. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
 
 ---
 
 ## Next Steps in Phase 3
-1. Vulkan render device & command buffer management (`ave::VulkanDevice`, swapchain/offscreen surface).
-2. 2D transform, opacity, and blend modes (Over, Add, Multiply, Screen) shader pipelines (SPIR-V).
-3. Connect real-time playback engine frame output through `ave::RenderGraph` for interactive display.
+1. Connect real-time playback engine frame output through `ave::RenderGraph` and `ave::VulkanCompositor`.
+2. Connect composited frames to the desktop Presentation shell viewer.
