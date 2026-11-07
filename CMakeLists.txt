@@ -20,6 +20,10 @@ option(AVE_BUILD_VULKAN_PROBE "Build Vulkan capability probe" ON)
 option(AVE_BUILD_MEDIA "Build media foundation and FFmpeg codecs" ON)
 option(AVE_BUILD_DESKTOP "Build desktop presentation application" ON)
 
+if(AVE_BUILD_TESTS)
+    include(CTest)
+endif()
+
 # Compiler warning and security flags
 if(MSVC)
     add_compile_options(
@@ -58,15 +62,8 @@ if(AVE_BUILD_MEDIA)
     endif()
 endif()
 
-# Vulkan hardware spike
-if(AVE_BUILD_VULKAN_PROBE)
-    find_package(Vulkan QUIET)
-    if(Vulkan_FOUND)
-        add_subdirectory(engines/vulkan_probe)
-    else()
-        message(STATUS "Vulkan SDK not found; Vulkan probe build deferred.")
-    endif()
-endif()
+# Real-Time Engines (Playback, Vulkan Rendering)
+add_subdirectory(engines)
 
 # Presentation desktop application
 if(AVE_BUILD_DESKTOP)

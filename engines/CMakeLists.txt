@@ -1,4 +1,10 @@
-if(TARGET Vulkan::Vulkan)
-    add_subdirectory(vulkan_probe)
-endif()
+add_subdirectory(playback)
 
+if(AVE_BUILD_VULKAN_PROBE)
+    find_package(Vulkan MODULE QUIET)
+    if(TARGET Vulkan::Vulkan OR Vulkan_FOUND OR (Vulkan_INCLUDE_DIR AND Vulkan_LIBRARY))
+        add_subdirectory(vulkan_probe)
+    else()
+        message(STATUS "Vulkan SDK not found; Vulkan probe build deferred.")
+    endif()
+endif()

@@ -1,6 +1,7 @@
 -std=c++20
 -Icore/include
 -Imedia/include
+-Iengines/playback/include
 -IC:/VulkanSDK/1.4.363.0/Include
 -ID:/DevTools/ffmpeg/include
 -DNOMINMAX

@@ -25,6 +25,13 @@ add_test(NAME MediaAssetTest COMMAND ave_media_asset_test)
 add_test(NAME MediaPoolTest COMMAND ave_media_pool_test)
 add_test(NAME TimelineTest COMMAND ave_timeline_test)
 
+if(TARGET ave_playback)
+    add_executable(ave_playback_engine_test playback_engine_test.cpp)
+    target_link_libraries(ave_playback_engine_test PRIVATE ave_playback ave_core)
+    target_compile_features(ave_playback_engine_test PRIVATE cxx_std_20)
+    add_test(NAME PlaybackEngineTest COMMAND ave_playback_engine_test)
+endif()
+
 if(TARGET ave_media)
     add_executable(ave_ffmpeg_probe_test ffmpeg_probe_test.cpp)
     target_link_libraries(ave_ffmpeg_probe_test PRIVATE ave_media ave_core)
