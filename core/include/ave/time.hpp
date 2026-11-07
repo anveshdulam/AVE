@@ -50,6 +50,18 @@ public:
         return (m_num * other.m_den) < (other.m_num * m_den);
     }
 
+    constexpr bool operator<=(const Rational& other) const noexcept {
+        return !(other < *this);
+    }
+
+    constexpr bool operator>(const Rational& other) const noexcept {
+        return other < *this;
+    }
+
+    constexpr bool operator>=(const Rational& other) const noexcept {
+        return !(*this < other);
+    }
+
     constexpr Rational operator+(const Rational& other) const {
         int64_t num = m_num * other.m_den + other.m_num * m_den;
         int64_t den = m_den * other.m_den;

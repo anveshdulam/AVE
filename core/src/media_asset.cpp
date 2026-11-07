@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <stdexcept>
 #include <algorithm>
+#include <cctype>
 
 namespace ave {
 

@@ -1,6 +1,10 @@
 add_library(ave_media STATIC
     src/ffmpeg_probe.cpp
+    src/media_cache.cpp
+    src/media_extractor.cpp
     include/ave/ffmpeg_probe.hpp
+    include/ave/media_cache.hpp
+    include/ave/media_extractor.hpp
 )
 
 target_include_directories(ave_media PUBLIC
@@ -14,4 +18,3 @@ target_link_libraries(ave_media PUBLIC
 )
 
 target_compile_features(ave_media PUBLIC cxx_std_20)
-
