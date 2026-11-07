@@ -10,9 +10,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Add custom CMake module path
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
 # Global options
 option(AVE_BUILD_TESTS "Build automated test suite" ON)
 option(AVE_BUILD_VULKAN_PROBE "Build Vulkan capability probe" ON)
+option(AVE_BUILD_MEDIA "Build media foundation and FFmpeg codecs" ON)
 option(AVE_BUILD_DESKTOP "Build desktop presentation application" ON)
 
 # Compiler warning and security flags
@@ -42,6 +46,17 @@ endif()
 # Core engine library
 add_subdirectory(core)
 
+# Media foundation & FFmpeg codecs
+if(AVE_BUILD_MEDIA)
+    find_package(FFmpeg QUIET)
+    if(FFmpeg_FOUND)
+        message(STATUS "FFmpeg found: ${FFmpeg_INCLUDE_DIR}")
+        add_subdirectory(media)
+    else()
+        message(STATUS "FFmpeg not found; media subsystem build deferred.")
+    endif()
+endif()
+
 # Vulkan hardware spike
 if(AVE_BUILD_VULKAN_PROBE)
     find_package(Vulkan QUIET)
@@ -68,4 +83,3 @@ if(AVE_BUILD_TESTS)
     find_package(GTest CONFIG QUIET)
     add_subdirectory(tests)
 endif()
-

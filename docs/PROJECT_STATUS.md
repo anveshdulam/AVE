@@ -1,9 +1,9 @@
 # Autonomous Video Editor — Project Status
 
 ## Project Baseline
-- **Milestone:** Phase 0 — Foundation & Engineering Setup
+- **Milestone:** Phase 1 — Media Foundation (Active)
 - **Date:** 2026-11-07
-- **Architecture Status:** Baseline frozen; 5-layer system and ADRs 0001–0004 established.
+- **Architecture Status:** 5-layer system and ADRs 0001–0005 established.
 - **Hardware Profile (Audited):**
   - CPU: Intel(R) Core(TM) Ultra 5 125H (14 cores: 4P + 8E + 2LPE, 18 logical threads)
   - RAM: 16 GB LPDDR5X (7467 MT/s)
@@ -13,31 +13,31 @@
 
 ---
 
-## Phase 0 Progress Tracker
+## Progress Tracker
 
-| Task / Deliverable | Status | Details |
+| Milestone / Deliverable | Status | Details |
 |---|---|---|
-| Workspace & Skill Pack Verification | **Complete** | All 27 specialist skills verified readable on disk |
-| Host Hardware & Toolchain Audit | **Complete** | CPU, GPU, memory, and software gaps audited |
-| Git Repository Initialization | **Complete** | Git initialized, `.gitignore` protects local agent state |
-| Five-Layer Directory Layout | **Complete** | `apps/`, `core/`, `engines/`, `media/`, `platform/`, `ai/`, `tests/` |
-| Engineering Config Files | **Complete** | `CMakeLists.txt`, `CMakePresets.json`, `vcpkg.json`, `.editorconfig`, `.clang-format` |
-| Architecture Decision Records (ADRs) | **Complete** | ADR-0001 (Build/Platform), ADR-0002 (Vulkan), ADR-0003 (Project Model), ADR-0004 (5 Layers) |
-| Core Rational Time Primitive | **Complete** | Exact rational arithmetic (`ave::Rational`) implemented in `core/` |
-| Vulkan Capability Probe Spike | **Complete** | `engines/vulkan_probe/` compiled and verified with LunarG Vulkan SDK |
-| Automated Smoke Test Suite | **Complete** | CTest tests (`SmokeTest` and `VulkanProbeTest`) passing 100% |
-| Host Compiler & SDK Installation | **Complete** | MSVC v143 (v19.44.35229) & Windows 11 SDK (10.0.26100.0) verified on `D:\DevTools` |
-| Build Tools (CMake & Ninja) | **Complete** | CMake 4.4.4 and Ninja 1.13.2 installed and verified |
-| Package Manager (vcpkg) | **Complete** | Cloned & bootstrapped at `D:\vcpkg` (`VCPKG_ROOT` configured) |
-| LunarG Vulkan SDK Installation | **Complete** | Installed at `C:\VulkanSDK\1.4.363.0` (`VULKAN_SDK` configured) |
-| Windows CI Workflow | **Complete** | Configured in `.github/workflows/ci.yml` |
-| Configure, Build & CTest Verification | **Complete** | Full CMake build and CTest execution passing 100% |
-| Phase 0 Exit Gate | **MET** | Reproducible C++20 build, passing smoke tests, Vulkan probe verified, ADRs documented |
+| **Phase 0: Foundation & Engineering Setup** | **COMPLETE** | Toolchain, CMake, presets, ADRs 0001–0004, smoke test, Vulkan probe passing |
+| C++ Compiler & SDK | **Complete** | MSVC v143 (v19.44.35229) & Windows 11 SDK (10.0.26100.0) |
+| Build Tools & Package Manager | **Complete** | CMake 4.4.4, Ninja 1.13.2, vcpkg bootstrapped at `D:\vcpkg` |
+| GPU Architecture & LunarG SDK | **Complete** | Vulkan 1.4.363.0 at `C:\VulkanSDK\1.4.363.0` (Validation layers verified) |
+| Exact Rational Arithmetic | **Complete** | `ave::Rational` (+, -, *, /, exact 64-bit integer reduction, frames conversion) |
+| Automated Smoke Suite | **Complete** | CTest tests passing 100% |
+| **Phase 1: Media Foundation** | **IN PROGRESS** | FFmpeg integration, media asset model, probing |
+| Immutable Media Asset Model | **Complete** | `ave::MediaAsset`, `ave::SourceStream`, `ave::UUID` in `core/` |
+| JSON Serialization / Deserialization | **Complete** | Exact rational serialization and round-trip verification |
+| FFmpeg LGPL Integration | **Complete** | FFmpeg 8.1 LGPL shared libraries in `D:\DevTools\ffmpeg` (`cmake/FindFFmpeg.cmake`) |
+| Container & Stream Probing | **Complete** | `ave::FFmpegProbe` in `media/` (container, video/audio stream maps, color, layout) |
+| Media Subsystem Unit Tests | **Complete** | `MediaAssetTest` and `FFmpegProbeTest` passing in CTest (4/4 total) |
+| Architecture Decision Record | **Complete** | ADR-0005 (FFmpeg Media Ingest, Demuxing and Codec Integration) |
+| Media Pool & Clip Management | **Pending** | Organization into bins, non-destructive clip references |
+| Thumbnail & Waveform Background Jobs | **Pending** | Non-blocking visual contact sheets & audio waveform peaks |
 
 ---
 
-## Next Milestone: Phase 1 — Media Foundation
-1. FFmpeg demux/decode adapter.
-2. Media asset model and stable UUID identity.
-3. Media Pool data structures.
-4. Thumbnail and waveform peak generation background jobs.
+## Test Verification Summary
+All 4 automated tests pass 100% via CTest:
+1. `VulkanProbeTest` — Physical GPU enumeration (Intel Arc Graphics 0x7d55, Vulkan 1.4.325)
+2. `SmokeTest` — Canonical rational time arithmetic & frame conversion
+3. `MediaAssetTest` — UUID generation, stream mapping, JSON serialization round-trip
+4. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction

@@ -62,6 +62,32 @@ public:
         return Rational(num, den);
     }
 
+    constexpr Rational operator*(const Rational& other) const {
+        return Rational(m_num * other.m_num, m_den * other.m_den);
+    }
+
+    constexpr Rational operator*(int64_t scalar) const {
+        return Rational(m_num * scalar, m_den);
+    }
+
+    constexpr Rational operator/(const Rational& other) const {
+        if (other.m_num == 0) {
+            throw std::invalid_argument("Division by zero rational");
+        }
+        return Rational(m_num * other.m_den, m_den * other.m_num);
+    }
+
+    constexpr Rational operator/(int64_t scalar) const {
+        if (scalar == 0) {
+            throw std::invalid_argument("Division by zero scalar");
+        }
+        return Rational(m_num, m_den * scalar);
+    }
+
+    friend constexpr Rational operator*(int64_t scalar, const Rational& r) {
+        return r * scalar;
+    }
+
 private:
     int64_t m_num;
     int64_t m_den;
@@ -80,4 +106,3 @@ private:
 };
 
 } // namespace ave
-
