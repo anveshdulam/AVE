@@ -215,3 +215,4 @@ void PlaybackClock::clamp_time(Rational& time) const {
 }
 
 } // namespace ave
+

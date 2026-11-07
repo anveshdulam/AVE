@@ -30,6 +30,12 @@ if(TARGET ave_playback)
     target_link_libraries(ave_playback_engine_test PRIVATE ave_playback ave_core)
     target_compile_features(ave_playback_engine_test PRIVATE cxx_std_20)
     add_test(NAME PlaybackEngineTest COMMAND ave_playback_engine_test)
+
+    add_executable(ave_stream_decoder_test stream_decoder_test.cpp)
+    target_link_libraries(ave_stream_decoder_test PRIVATE ave_playback ave_core)
+    target_compile_features(ave_stream_decoder_test PRIVATE cxx_std_20)
+    add_test(NAME StreamDecoderTest COMMAND ave_stream_decoder_test "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sample_test.mp4")
+    set_tests_properties(StreamDecoderTest PROPERTIES ENVIRONMENT "PATH=D:/DevTools/ffmpeg/bin;$ENV{PATH}")
 endif()
 
 if(TARGET ave_media)

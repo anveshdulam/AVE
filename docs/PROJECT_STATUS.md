@@ -39,19 +39,22 @@
 | Rational Playback Clock | **Complete** | `ave::PlaybackClock` (monotonic system clock, audio master sync, 1-frame stepping, speed control) |
 | Bounded Frame Queue & Backpressure | **Complete** | `ave::BoundedFrameQueue<VideoFrame>` (thread-safe bounded queue with upstream backpressure) |
 | Playback Controller & A/V Sync | **Complete** | `ave::PlaybackController` (action evaluation: Present/Hold/Drop/Stale, seek generation tokens) |
+| Stream Video Decoder | **Complete** | `ave::StreamDecoder` (frame-accurate keyframe seeking, RGBA scaling via swscale, exact rational PTS) |
+| Timeline Prefetch Worker | **Complete** | `ave::TimelinePrefetcher` (asynchronous background prefetcher, gap handling, instant seek cancellation) |
 
 ---
 
 ## Test Verification Summary
-All 8 automated tests pass 100% via CTest:
+All 9 automated tests pass 100% via CTest:
 1. `VulkanProbeTest` — Physical GPU enumeration (Intel Arc Graphics 0x7d55, Vulkan 1.4.325)
 2. `SmokeTest` — Canonical rational time arithmetic & frame conversion
 3. `MediaAssetTest` — UUID generation, stream mapping, JSON serialization round-trip
 4. `MediaPoolTest` — Bin hierarchies, non-destructive sub-clipping, clip moving, case-insensitive search
 5. `TimelineTest` — Multi-track timeline, item placement, overlap prevention, active item query, blade cut, and JSON roundtrip
 6. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
-7. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
-8. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
+7. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
+8. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
+9. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
 
 ---
 
