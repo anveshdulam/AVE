@@ -1,9 +1,11 @@
 add_library(ave_core STATIC
     src/time.cpp
+    src/timecode.cpp
     src/media_asset.cpp
     src/media_pool.cpp
     src/timeline.cpp
     include/ave/time.hpp
+    include/ave/timecode.hpp
     include/ave/uuid.hpp
     include/ave/media_asset.hpp
     include/ave/media_pool.hpp

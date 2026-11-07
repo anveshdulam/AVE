@@ -14,3 +14,4 @@ target_include_directories(ave_audio PUBLIC
 
 target_link_libraries(ave_audio PUBLIC ave_core)
 target_compile_features(ave_audio PUBLIC cxx_std_20)
+

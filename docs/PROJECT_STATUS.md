@@ -1,7 +1,7 @@
 # Autonomous Video Editor — Project Status
 
 ## Project Baseline
-- **Milestone:** Phase 2 — Real-Time Playback & Timeline Engine (In Progress)
+- **Milestone:** Phase 2 — Real-Time Playback & Timeline Engine (Complete)
 - **Date:** 2026-11-07
 - **Architecture Status:** 5-layer system and ADRs 0001–0006 established.
 - **Hardware Profile (Audited):**
@@ -34,7 +34,7 @@
 | Clangd & IDE Diagnostics | **Complete** | `.clangd`, `compile_flags.txt`, and `.vscode/settings.json` configured for C++20 language server with zero diagnostics |
 | Canonical Timeline Model | **Complete** | `ave::Timeline`, `ave::Track`, `ave::TimelineItem` with non-destructive blade cutting and JSON roundtrip |
 | Phase 1 Exit Gate | **MET** | Ingest, demuxing, decoding, sub-clipping, caching, and timeline model verified with 100% CTest pass |
-| **Phase 2: Real-Time Playback & Timeline Engine** | **IN PROGRESS** | Playback clock, bounded queues, A/V synchronization, scrubbing tokens |
+| **Phase 2: Real-Time Playback & Timeline Engine** | **COMPLETE** | Playback session, clock, A/V sync, audio engine, presentation view models, desktop shell |
 | Architecture Decision Record | **Complete** | ADR-0006 (Real-Time Playback Clocking, Bounded Scheduling, and A/V Synchronization) |
 | Rational Playback Clock | **Complete** | `ave::PlaybackClock` (monotonic system clock, audio master sync, 1-frame stepping, speed control) |
 | Bounded Frame Queue & Backpressure | **Complete** | `ave::BoundedFrameQueue<VideoFrame>` (thread-safe bounded queue with upstream backpressure) |
@@ -45,11 +45,18 @@
 | Lock-Free Audio RingBuffer | **Complete** | `ave::AudioRingBuffer` (SPSC lock-free circular buffer, zero-alloc audio callback, underrun silence fill) |
 | Multi-Track Audio Mixer | **Complete** | `ave::AudioMixer` (sample-accurate mixing, constant-power panning, track solo/mute routing) |
 | Audio Device Abstraction | **Complete** | `ave::AudioDevice`, `ave::NullAudioDevice` (deterministic callback loop, underrun tracking) |
+| Stream Audio Decoder | **Complete** | `ave::StreamAudioDecoder` (resampling to 32-bit float PCM via libswresample, sample-accurate seeking) |
+| Playback Session Coordinator | **Complete** | `ave::PlaybackSession` (unified transport: play, pause, seek, step, speed; A/V clocking, frame updates) |
+| SMPTE Timecode Calculator | **Complete** | `ave::Timecode` (exact rational timecode conversion, HH:MM:SS:FF formatting and string parsing) |
+| Presentation ViewModels | **Complete** | `ave::TimelineViewModel`, `ave::PlaybackViewModel` (decoupled presentation state and transport bar) |
+| Desktop Application Shell | **Complete** | `apps/desktop/ave_desktop.exe` (v0.1.0 application shell with `--smoke-test` and Qt-ready QML hooks) |
+| End-to-End Playback Integration Test | **Complete** | `ave_playback_integration_test` (synchronous A/V playback, seeking, scrubbing tokens, timecode) |
+| Phase 2 Exit Gate | **MET** | Complete real-time video/audio playback pipeline verified with 11/11 automated tests passing 100% |
 
 ---
 
 ## Test Verification Summary
-All 10 automated tests pass 100% via CTest:
+All 11 automated test suites pass 100% via CTest:
 1. `VulkanProbeTest` — Physical GPU enumeration (Intel Arc Graphics 0x7d55, Vulkan 1.4.325)
 2. `SmokeTest` — Canonical rational time arithmetic & frame conversion
 3. `MediaAssetTest` — UUID generation, stream mapping, JSON serialization round-trip
@@ -57,14 +64,15 @@ All 10 automated tests pass 100% via CTest:
 5. `TimelineTest` — Multi-track timeline, item placement, overlap prevention, active item query, blade cut, and JSON roundtrip
 6. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
 7. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
-8. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
-9. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
-10. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
+8. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
+9. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
+10. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
+11. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
 
 ---
 
-## Next Milestone: Phase 2 — Real-Time Playback & Timeline Engine
-1. Multi-track non-destructive timeline data model (`Track`, `TrackItem`, `Gap`, `Transition`).
-2. Timeline playback clock and frame prefetch scheduling queue.
-3. Audio/Video synchronization engine with drift correction.
-4. Render graph frame compositing pipeline.
+## Next Milestone: Phase 3 — GPU Render Graph & Vulkan Compositor
+1. Backend-neutral render graph interface (`ave::RenderGraph`, `ave::RenderNode`, `ave::RenderResource`).
+2. Vulkan render device & command buffer management (`ave::VulkanDevice`, swapchain/offscreen surface).
+3. 2D transform, opacity, and blend modes (Over, Add, Multiply, Screen) shader pipelines (SPIR-V).
+4. Frame compositing pipeline connecting decoded timeline video frames to the render graph.

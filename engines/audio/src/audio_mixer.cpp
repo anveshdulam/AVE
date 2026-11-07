@@ -31,10 +31,20 @@ TrackMixParams AudioMixer::track_params(const std::string& track_id) const {
 
 void AudioMixer::mix(const std::vector<std::pair<std::string, const AudioBuffer*>>& track_buffers,
                      AudioBuffer& master_out) {
-    master_out.clear();
-    if (master_out.channels() != 2) {
+    size_t required_frames = master_out.frame_count();
+    if (required_frames == 0) {
+        for (const auto& [_, buf] : track_buffers) {
+            if (buf) {
+                required_frames = std::max(required_frames, buf->frame_count());
+            }
+        }
+        if (required_frames > 0) {
+            master_out.resize(required_frames, 2, master_out.sample_rate());
+        }
+    } else if (master_out.channels() != 2) {
         master_out.resize(master_out.frame_count(), 2, master_out.sample_rate());
     }
+    master_out.clear();
 
     // Determine if any track is soloed
     bool any_soloed = false;
@@ -87,3 +97,4 @@ void AudioMixer::mix(const std::vector<std::pair<std::string, const AudioBuffer*
 }
 
 } // namespace ave
+

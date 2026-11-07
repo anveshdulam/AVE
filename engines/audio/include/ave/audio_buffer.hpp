@@ -45,6 +45,12 @@ public:
         std::fill(data_.begin(), data_.end(), 0.0f);
     }
 
+    void truncate_frames(size_t new_frame_count) noexcept {
+        if (channels_ > 0 && new_frame_count < frame_count()) {
+            data_.resize(new_frame_count * static_cast<size_t>(channels_));
+        }
+    }
+
     void apply_gain(float gain) noexcept {
         for (float& s : data_) {
             s *= gain;
@@ -106,3 +112,4 @@ private:
 };
 
 } // namespace ave
+

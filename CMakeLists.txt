@@ -69,10 +69,11 @@ add_subdirectory(engines)
 if(AVE_BUILD_DESKTOP)
     find_package(Qt6 6.5 QUIET COMPONENTS Core Gui Quick Qml)
     if(Qt6_FOUND)
-        add_subdirectory(apps/desktop)
+        message(STATUS "Qt 6 found: enabling Qt Quick desktop UI.")
     else()
-        message(STATUS "Qt 6 (Core/Gui/Quick/Qml) not found; desktop UI build deferred.")
+        message(STATUS "Qt 6 not found; desktop UI builds in headless/presentation model mode.")
     endif()
+    add_subdirectory(apps/desktop)
 endif()
 
 # Automated test suite
