@@ -19,6 +19,14 @@ target_link_libraries(ave_desktop PRIVATE
 
 if(TARGET ave_playback)
     target_link_libraries(ave_desktop PRIVATE ave_playback)
+    if(WIN32 AND EXISTS "${FFmpeg_INCLUDE_DIR}/../bin")
+        add_custom_command(TARGET ave_desktop POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${FFmpeg_INCLUDE_DIR}/../bin"
+            "$<TARGET_FILE_DIR:ave_desktop>"
+            COMMENT "Copying FFmpeg runtime DLLs to desktop app binary folder"
+        )
+    endif()
 endif()
 
 target_compile_features(ave_desktop PRIVATE cxx_std_20)
