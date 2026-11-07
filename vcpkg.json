@@ -1,0 +1,10 @@
+{
+  "name": "autonomous-video-editor",
+  "version-string": "0.1.0",
+  "builtin-baseline": "5061f0411a7a47d99532585296c0f6f4c3300300",
+  "dependencies": [
+    "gtest",
+    "nlohmann-json"
+  ]
+}
+

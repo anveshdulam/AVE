@@ -1,0 +1,48 @@
+# Antigravity conversation memory (local agent state)
+.agent/
+
+# Build output directories
+build/
+out/
+bin/
+lib/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+
+# vcpkg package artifacts
+vcpkg_installed/
+
+# IDE and Editor files
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln.docstates
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Local media, test fixtures, model weights, and large binaries
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.wav
+*.flac
+*.pt
+*.pth
+*.onnx
+
+# Generated ZIP and VSIX archives
+*.zip
+*.vsix
+
+# Operating System files
+Thumbs.db
+Desktop.ini
+.DS_Store
