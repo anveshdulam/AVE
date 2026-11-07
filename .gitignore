@@ -1,6 +1,9 @@
 # Antigravity conversation memory (local agent state)
 .agent/
 
+# Generated compilation database
+compile_commands.json
+
 # Build output directories
 build/
 out/

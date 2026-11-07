@@ -2,10 +2,12 @@ add_library(ave_core STATIC
     src/time.cpp
     src/media_asset.cpp
     src/media_pool.cpp
+    src/timeline.cpp
     include/ave/time.hpp
     include/ave/uuid.hpp
     include/ave/media_asset.hpp
     include/ave/media_pool.hpp
+    include/ave/timeline.hpp
 )
 
 target_include_directories(ave_core PUBLIC

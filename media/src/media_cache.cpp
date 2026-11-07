@@ -63,3 +63,4 @@ size_t MediaCache::waveform_count() const {
 }
 
 } // namespace ave
+

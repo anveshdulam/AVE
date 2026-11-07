@@ -30,18 +30,21 @@
 | Architecture Decision Record | **Complete** | ADR-0005 (FFmpeg Media Ingest, Demuxing and Codec Integration) |
 | Media Pool & Clip Management | **Complete** | `ave::MediaPool`, `ave::MediaBin`, `ave::MediaClip` in `core/` (bins, sub-clipping, search, JSON) |
 | Thumbnail & Waveform Background Jobs | **Complete** | `ave::ThumbnailExtractor` (RGBA32 via libswscale), `ave::WaveformExtractor` (min/max peak envelopes via libswresample), and `ave::MediaCache` |
-| Phase 1 Exit Gate | **MET** | Ingest, demuxing, decoding, sub-clipping, caching verified with 100% CTest pass |
+| Clangd & IDE Diagnostics | **Complete** | `.clangd`, `compile_flags.txt`, and `.vscode/settings.json` configured for C++20 language server with zero diagnostics |
+| Canonical Timeline Model | **Complete** | `ave::Timeline`, `ave::Track`, `ave::TimelineItem` with non-destructive blade cutting and JSON roundtrip |
+| Phase 1 Exit Gate | **MET** | Ingest, demuxing, decoding, sub-clipping, caching, and timeline model verified with 100% CTest pass |
 
 ---
 
 ## Test Verification Summary
-All 6 automated tests pass 100% via CTest:
+All 7 automated tests pass 100% via CTest:
 1. `VulkanProbeTest` — Physical GPU enumeration (Intel Arc Graphics 0x7d55, Vulkan 1.4.325)
 2. `SmokeTest` — Canonical rational time arithmetic & frame conversion
 3. `MediaAssetTest` — UUID generation, stream mapping, JSON serialization round-trip
 4. `MediaPoolTest` — Bin hierarchies, non-destructive sub-clipping, clip moving, case-insensitive search
-5. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
-6. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
+5. `TimelineTest` — Multi-track timeline, item placement, overlap prevention, active item query, blade cut, and JSON roundtrip
+6. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
+7. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
 
 ---
 
