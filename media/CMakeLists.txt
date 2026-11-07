@@ -14,3 +14,4 @@ target_link_libraries(ave_media PUBLIC
 )
 
 target_compile_features(ave_media PUBLIC cxx_std_20)
+

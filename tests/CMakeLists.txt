@@ -11,9 +11,14 @@ add_executable(ave_media_asset_test media_asset_test.cpp)
 target_link_libraries(ave_media_asset_test PRIVATE ave_core)
 target_compile_features(ave_media_asset_test PRIVATE cxx_std_20)
 
+add_executable(ave_media_pool_test media_pool_test.cpp)
+target_link_libraries(ave_media_pool_test PRIVATE ave_core)
+target_compile_features(ave_media_pool_test PRIVATE cxx_std_20)
+
 include(CTest)
 add_test(NAME SmokeTest COMMAND ave_smoke_test)
 add_test(NAME MediaAssetTest COMMAND ave_media_asset_test)
+add_test(NAME MediaPoolTest COMMAND ave_media_pool_test)
 
 if(TARGET ave_media)
     add_executable(ave_ffmpeg_probe_test ffmpeg_probe_test.cpp)

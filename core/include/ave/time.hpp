@@ -63,25 +63,35 @@ public:
     }
 
     constexpr Rational operator*(const Rational& other) const {
-        return Rational(m_num * other.m_num, m_den * other.m_den);
+        int64_t g1 = std::gcd(m_num, other.m_den);
+        int64_t g2 = std::gcd(other.m_num, m_den);
+        int64_t n = (m_num / g1) * (other.m_num / g2);
+        int64_t d = (m_den / g2) * (other.m_den / g1);
+        return Rational(n, d);
     }
 
     constexpr Rational operator*(int64_t scalar) const {
-        return Rational(m_num * scalar, m_den);
+        int64_t g = std::gcd(scalar, m_den);
+        return Rational(m_num * (scalar / g), m_den / g);
     }
 
     constexpr Rational operator/(const Rational& other) const {
         if (other.m_num == 0) {
             throw std::invalid_argument("Division by zero rational");
         }
-        return Rational(m_num * other.m_den, m_den * other.m_num);
+        int64_t g1 = std::gcd(m_num, other.m_num);
+        int64_t g2 = std::gcd(other.m_den, m_den);
+        int64_t n = (m_num / g1) * (other.m_den / g2);
+        int64_t d = (m_den / g2) * (other.m_num / g1);
+        return Rational(n, d);
     }
 
     constexpr Rational operator/(int64_t scalar) const {
         if (scalar == 0) {
             throw std::invalid_argument("Division by zero scalar");
         }
-        return Rational(m_num, m_den * scalar);
+        int64_t g = std::gcd(m_num, scalar);
+        return Rational(m_num / g, m_den * (scalar / g));
     }
 
     friend constexpr Rational operator*(int64_t scalar, const Rational& r) {

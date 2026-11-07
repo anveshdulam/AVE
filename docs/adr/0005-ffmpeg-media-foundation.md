@@ -28,3 +28,4 @@ We require:
 - **Positive:** Universal format support (H.264, HEVC, ProRes, AV1, AAC, PCM, Opus, VP9), hardware acceleration hooks (VPL, Vulkan Video, OpenCL), robust metadata extraction, fully testable with synthetic test fixtures.
 - **Negative:** FFmpeg C API lifecycle management requires rigorous RAII wrappers; DLL runtime distribution must be included in packaging manifests.
 - **Licensing Compliance:** Kept LGPL-compliant; GPL-only codecs (e.g. x264/x265 enc) remain optional or modularized.
+

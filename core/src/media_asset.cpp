@@ -319,3 +319,4 @@ MediaAsset MediaAsset::from_json(const std::string& json_text) {
 }
 
 } // namespace ave
+
