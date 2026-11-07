@@ -161,3 +161,4 @@ VideoFrame RenderImage::to_video_frame(Rational pts, Rational duration, uint64_t
 }
 
 } // namespace ave
+

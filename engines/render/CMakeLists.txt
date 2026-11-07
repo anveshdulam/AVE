@@ -16,3 +16,4 @@ target_include_directories(ave_render PUBLIC
 
 target_link_libraries(ave_render PUBLIC ave_core)
 target_compile_features(ave_render PUBLIC cxx_std_20)
+

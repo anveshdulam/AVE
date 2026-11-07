@@ -19,3 +19,4 @@ RenderNode::RenderNode(NodeType type, std::string name)
       name_(name.empty() ? to_string(type) : std::move(name)) {}
 
 } // namespace ave
+

@@ -233,3 +233,4 @@ void OutputNode::execute(const std::vector<const RenderImage*>& inputs,
 }
 
 } // namespace ave
+

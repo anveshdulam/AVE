@@ -45,3 +45,4 @@ Key architectural and performance requirements:
 ## Consequences
 - **Positive:** Modular, testable compositing pipeline with zero hardware dependency in the graph layer; intermediate buffer reuse; deterministic CI testing.
 - **Negative:** Requires node abstraction boilerplate and translation between graph operations and concrete GPU draw commands.
+

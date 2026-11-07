@@ -14,11 +14,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Ninja
-        uses: ashley-tauro/action-install-ninja@v1
-        with:
-          version: 1.12.1
-
       - name: Set up MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
         with:
@@ -31,9 +26,19 @@ jobs:
           vulkan-components: Vulkan-Headers, Vulkan-Loader
           vulkan-use-cache: true
 
+      - name: Set up FFmpeg Shared Dev Libraries
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip" -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath C:\
+          $ffmpeg_dir = (Get-ChildItem -Path C:\ -Filter "ffmpeg-*-win64-gpl-shared" -Directory | Select-Object -First 1).FullName
+          echo "FFMPEG_DIR=$ffmpeg_dir" >> $env:GITHUB_ENV
+          echo "$ffmpeg_dir\bin" >> $env:GITHUB_PATH
+          echo "Installed FFmpeg at $ffmpeg_dir"
+
       - name: Configure CMake
         run: |
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAVE_BUILD_TESTS=ON -DAVE_BUILD_VULKAN_PROBE=ON -DAVE_BUILD_DESKTOP=OFF
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAVE_BUILD_TESTS=ON -DAVE_BUILD_VULKAN_PROBE=ON -DAVE_BUILD_DESKTOP=ON
 
       - name: Build
         run: |
@@ -42,4 +47,3 @@ jobs:
       - name: Run CTest
         run: |
           ctest --test-dir build --output-on-failure
-

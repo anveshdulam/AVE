@@ -14,9 +14,12 @@ target_include_directories(ave_desktop PUBLIC
 target_link_libraries(ave_desktop PRIVATE
     ave_core
     ave_audio
-    ave_playback
     ave_render
 )
+
+if(TARGET ave_playback)
+    target_link_libraries(ave_desktop PRIVATE ave_playback)
+endif()
 
 target_compile_features(ave_desktop PRIVATE cxx_std_20)
 
