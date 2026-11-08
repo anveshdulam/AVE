@@ -1,4 +1,6 @@
 #include "ave/playback_session.hpp"
+#include "ave/vulkan_device.hpp"
+#include "ave/vulkan_compositor.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -137,6 +139,15 @@ uint64_t PlaybackSession::current_seek_generation() const noexcept {
     return controller_.clock().current_seek_generation();
 }
 
+void PlaybackSession::set_vulkan_device(std::shared_ptr<VulkanDevice> device) {
+    vulkan_device_ = std::move(device);
+    if (vulkan_device_) {
+        vulkan_compositor_ = VulkanCompositor::create(*vulkan_device_);
+    } else {
+        vulkan_compositor_.reset();
+    }
+}
+
 PresentationResult PlaybackSession::update() {
     PresentationResult result;
     Rational cur_time = controller_.clock().current_time();
@@ -156,11 +167,43 @@ PresentationResult PlaybackSession::update() {
     }
 
     result.presentation_time = cur_time;
-    result.frame = controller_.fetch_next_display_frame();
-    if (result.frame.has_value()) {
-        result.action = FrameSyncAction::Present;
+    auto raw_frame = controller_.fetch_next_display_frame();
+
+    const auto& v_tracks = timeline_.video_tracks();
+    result.active_tracks_count = 0;
+    for (const auto& trk : v_tracks) {
+        if (!trk.muted() && trk.item_at(cur_time) != nullptr) {
+            result.active_tracks_count++;
+        }
+    }
+
+    if (config_.enable_compositing) {
+        std::vector<VideoFrame> track_frames;
+        if (raw_frame.has_value()) {
+            track_frames.push_back(*raw_frame);
+        }
+
+        RenderContext ctx;
+        ctx.target_width = timeline_.width();
+        ctx.target_height = timeline_.height();
+        ctx.timeline_time = cur_time;
+        ctx.frame_rate = timeline_.frame_rate();
+
+        auto graph = RenderGraph::build_for_timeline(timeline_, cur_time, track_frames, ctx);
+        const RenderImage* comp_img = graph->execute(ctx);
+        if (comp_img) {
+            result.frame = comp_img->to_video_frame(cur_time,
+                                                    Rational{1, timeline_.frame_rate().numerator() > 0 ? timeline_.frame_rate().numerator() : 24},
+                                                    controller_.clock().current_seek_generation());
+            result.is_composited = true;
+            result.action = FrameSyncAction::Present;
+        } else {
+            result.frame = std::move(raw_frame);
+            result.action = result.frame.has_value() ? FrameSyncAction::Present : FrameSyncAction::Hold;
+        }
     } else {
-        result.action = FrameSyncAction::Hold;
+        result.frame = std::move(raw_frame);
+        result.action = result.frame.has_value() ? FrameSyncAction::Present : FrameSyncAction::Hold;
     }
 
     if (controller_.clock().state() == PlaybackState::Playing &&

@@ -134,9 +134,16 @@ int main() {
     {
         ave::Timeline tl("tl-json", "JSON Test", ave::Rational{30, 1});
         auto* v1 = tl.find_track_mut(tl.video_tracks()[0].id());
-        v1->add_item(ave::TimelineItem("json-v1", "c1", "a1", "Item 1",
-                                       ave::Rational{0, 1}, ave::Rational{8, 1},
-                                       ave::Rational{2, 1}));
+        ave::TimelineItem item("json-v1", "c1", "a1", "Item 1",
+                               ave::Rational{0, 1}, ave::Rational{8, 1},
+                               ave::Rational{2, 1});
+        item.set_transform(50.0f, -25.0f);
+        item.set_scale(1.5f, 0.75f);
+        item.set_rotation(45.0f);
+        item.set_anchor(0.25f, 0.75f);
+        item.set_opacity(0.85f);
+        item.set_blend_mode("Screen");
+        v1->add_item(std::move(item));
 
         std::string json = tl.to_json();
         ASSERT_TRUE(!json.empty());
@@ -147,7 +154,18 @@ int main() {
         ASSERT_EQ(restored.frame_rate(), ave::Rational(30, 1));
         ASSERT_EQ(restored.video_tracks().size(), 1);
         ASSERT_EQ(restored.video_tracks()[0].items().size(), 1);
-        ASSERT_EQ(restored.video_tracks()[0].items()[0].name(), "Item 1");
+        const auto& rest_item = restored.video_tracks()[0].items()[0];
+        ASSERT_EQ(rest_item.name(), "Item 1");
+        ASSERT_EQ(rest_item.transform_x(), 50.0f);
+        ASSERT_EQ(rest_item.transform_y(), -25.0f);
+        ASSERT_EQ(rest_item.scale_x(), 1.5f);
+        ASSERT_EQ(rest_item.scale_y(), 0.75f);
+        ASSERT_EQ(rest_item.rotation(), 45.0f);
+        ASSERT_EQ(rest_item.anchor_x(), 0.25f);
+        ASSERT_EQ(rest_item.anchor_y(), 0.75f);
+        ASSERT_TRUE(std::abs(rest_item.opacity() - 0.85f) < 0.001f);
+        ASSERT_EQ(rest_item.blend_mode(), "Screen");
+        ASSERT_TRUE(rest_item.has_transform());
     }
 
     std::cout << "[TimelineTest] All timeline model assertions passed!" << std::endl;

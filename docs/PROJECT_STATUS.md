@@ -1,9 +1,9 @@
 # Autonomous Video Editor — Project Status
 
 ## Project Baseline
-- **Milestone:** Phase 3 — GPU Render Graph & Vulkan Compositor (In Progress)
-- **Date:** 2026-11-07
-- **Architecture Status:** 5-layer system and ADRs 0001–0007 established.
+- **Milestone:** Phase 3 — GPU Render Graph & Vulkan Compositor (COMPLETE)
+- **Date:** 2026-11-08
+- **Architecture Status:** 5-layer system and ADRs 0001–0009 established.
 - **Hardware Profile (Audited):**
   - CPU: Intel(R) Core(TM) Ultra 5 125H (14 cores: 4P + 8E + 2LPE, 18 logical threads)
   - RAM: 16 GB LPDDR5X (7467 MT/s)
@@ -52,9 +52,10 @@
 | Desktop Application Shell | **Complete** | `apps/desktop/ave_desktop.exe` (v0.1.0 application shell with `--smoke-test` and Qt-ready QML hooks) |
 | End-to-End Playback Integration Test | **Complete** | `ave_playback_integration_test` (synchronous A/V playback, seeking, scrubbing tokens, timecode) |
 | Phase 2 Exit Gate | **MET** | Complete real-time video/audio playback pipeline verified with 11/11 automated tests passing 100% |
-| **Phase 3: GPU Render Graph & Vulkan Compositor** | **IN PROGRESS** | Backend-neutral DAG compositing, affine transforms, blend modes, multi-layer timeline builder |
+| **Phase 3: GPU Render Graph & Vulkan Compositor** | **COMPLETE** | Backend-neutral DAG compositing, affine transforms, blend modes, multi-layer timeline builder, Vulkan compute compositor, real-time PlaybackSession integration |
 | Architecture Decision Record | **Complete** | ADR-0007 (Backend-Neutral GPU Render Graph and Compositing Pipeline) |
 | Architecture Decision Record | **Complete** | ADR-0008 (Vulkan Offscreen Hardware Device and Compute Compositing Pipeline) |
+| Architecture Decision Record | **Complete** | ADR-0009 (Real-Time Composited Playback Pipeline and Presentation Integration) |
 | Canonical VideoFrame DTO | **Complete** | `ave::VideoFrame` moved to `core/include/ave/video_frame.hpp` for universal inter-subsystem access |
 | 2D Image Buffer & Bilinear Sampler | **Complete** | `ave::RenderImage` (RGBA8, RGBA16, RGBA32, Rec709, sRGB, linear Rec709, bilinear sampling) |
 | Compositing Node Hierarchy | **Complete** | `ave::RenderNode`, `SourceNode`, `TransformNode`, `OpacityNode`, `BlendNode`, `OutputNode` |
@@ -66,27 +67,38 @@
 | GLSL Compute Shader & Embedded SPIR-V | **Complete** | `compositor.comp` compiled via glslc and embedded in C++ header `ave::shaders::compositor_comp_spv` |
 | Vulkan GPU Compositor | **Complete** | `ave::VulkanCompositor` (compute pipeline, descriptor sets, push constants, 16x16 workgroup hardware dispatch) |
 | Phase 3 Step 2 Hardware Test | **Complete** | `ave_vulkan_render_test` (Intel Arc GPU execution: bit-exact texture upload/readback, Over blend, solid color alpha) |
+| Spatial Properties on TimelineItem | **Complete** | Position ($X, Y$), scale ($X, Y$), rotation, anchor ($X, Y$), opacity, and blend modes with JSON serialization |
+| Dynamic Multi-Track Render Graph Builder | **Complete** | `RenderGraph::build_for_timeline` dynamically queries active clips across all unmuted tracks at playhead PTS |
+| Real-Time Composited PlaybackSession | **Complete** | `PlaybackSession::update()` routes frames through RenderGraph and VulkanCompositor with PresentationResult metadata |
+| Presentation Shell Compositing Integration | **Complete** | `PlaybackViewModel` and desktop app shell display hardware accelerator profile and compositing status |
+| Multi-Track Compositing Integration Test | **Complete** | `ave_compositing_integration_test` (multi-track PiP compositing, 50% scale, 80% opacity, track muting, seek, timecode) |
+| Phase 3 Exit Gate | **MET** | Complete real-time GPU/CPU compositing pipeline verified with 14/14 automated tests passing 100% |
+| **Phase 4: Non-Destructive Editing & Command Bus Undo/Redo** | **NEXT** | Typed Command hierarchy, CommandHistory, undo/redo stacks, dirty tracking, transaction batching |
 
 ---
 
 ## Test Verification Summary
-All 13 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
+All 14 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
 1. `VulkanProbeTest` — Physical GPU enumeration (Intel Arc Graphics 0x7d55, Vulkan 1.4.325)
 2. `SmokeTest` — Canonical rational time arithmetic & frame conversion
 3. `MediaAssetTest` — UUID generation, stream mapping, JSON serialization round-trip
 4. `MediaPoolTest` — Bin hierarchies, non-destructive sub-clipping, clip moving, case-insensitive search
-5. `TimelineTest` — Multi-track timeline, item placement, overlap prevention, active item query, blade cut, and JSON roundtrip
+5. `TimelineTest` — Multi-track timeline, item placement, overlap prevention, active item query, blade cut, transform/opacity serialization, and JSON roundtrip
 6. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
 7. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
 8. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
-9. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
-10. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
-11. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
-12. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
-13. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
+9. `CompositingIntegrationTest` — End-to-end multi-track picture-in-picture compositing, spatial transform, opacity, track mute, seeking, and frame accuracy
+10. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
+11. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
+12. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
+13. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
+14. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
 
 ---
 
-## Next Steps in Phase 3
-1. Connect real-time playback engine frame output through `ave::RenderGraph` and `ave::VulkanCompositor`.
-2. Connect composited frames to the desktop Presentation shell viewer.
+## Next Steps in Phase 4
+1. Review `.agents/skills/command-bus-undo/SKILL.md`.
+2. Design and implement the typed Command Bus architecture (`ave::Command`, `ave::CommandResult`, `ave::CommandHistory`).
+3. Implement core timeline edit commands: `InsertClipCommand`, `DeleteClipCommand`, `MoveClipCommand`, `SplitClipCommand`, `SetTransformCommand`, `SetTrackMuteCommand`.
+4. Implement atomic transaction batching (`CompositeCommand`) and dirty-state project change tracking.
+5. Create comprehensive unit and integration tests (`ave_command_bus_test`).

@@ -6,6 +6,7 @@
 #include "ave/playback_session.hpp"
 #include "ave/timeline_view_model.hpp"
 #include "ave/playback_view_model.hpp"
+#include "ave/vulkan_device.hpp"
 
 #if defined(AVE_ENABLE_QT)
 #include <QGuiApplication>
@@ -28,20 +29,34 @@ int main(int argc, char *argv[]) {
     }
 
     if (run_smoke) {
-        std::cout << "[Smoke Test] Initializing Presentation ViewModels & Playback Session...\n";
+        std::cout << "[Smoke Test] Initializing Presentation ViewModels, Playback Session & Render Graph...\n";
         ave::Timeline timeline("tl-1", "Default Timeline", ave::Rational{24, 1});
         ave::MediaPool pool;
         ave::PlaybackSession session(timeline, pool);
+
+        auto vulkan_dev = ave::VulkanDevice::create(false);
+        if (vulkan_dev) {
+            session.set_vulkan_device(std::move(vulkan_dev));
+        }
+
         ave::TimelineViewModel timeline_vm(timeline);
         ave::PlaybackViewModel playback_vm(session);
 
+        std::cout << "[Smoke Test] Hardware Accelerator: " << playback_vm.hardware_device_name() << "\n";
+        std::cout << "[Smoke Test] Compositing Pipeline: " << (playback_vm.is_compositing_enabled() ? "Active" : "Disabled") << "\n";
         std::cout << "[Smoke Test] Playhead Timecode: " << playback_vm.current_timecode() << "\n";
+
         playback_vm.play();
         std::cout << "[Smoke Test] State: " << (playback_vm.is_playing() ? "Playing" : "Stopped") << "\n";
+
+        auto pres_res = playback_vm.update();
+        std::cout << "[Smoke Test] Presentation Update: Composited=" << (pres_res.is_composited ? "true" : "false")
+                  << " Action=" << static_cast<int>(pres_res.action) << "\n";
+
         playback_vm.step_forward(1);
         std::cout << "[Smoke Test] Stepped +1 frame. Timecode: " << playback_vm.current_timecode() << "\n";
         playback_vm.pause();
-        std::cout << "[Smoke Test] Paused successfully. All Presentation models verified.\n";
+        std::cout << "[Smoke Test] Paused successfully. All Presentation and Compositing models verified.\n";
         return 0;
     }
 

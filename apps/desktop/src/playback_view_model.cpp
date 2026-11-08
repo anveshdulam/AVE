@@ -1,4 +1,5 @@
 #include "ave/playback_view_model.hpp"
+#include "ave/vulkan_device.hpp"
 
 namespace ave {
 
@@ -24,6 +25,30 @@ Rational PlaybackViewModel::current_pts() const noexcept {
 
 std::string PlaybackViewModel::current_timecode() const {
     return Timecode::from_rational(session_.current_time(), sequence_fps_).to_string();
+}
+
+bool PlaybackViewModel::is_compositing_enabled() const noexcept {
+    return session_.is_compositing_enabled();
+}
+
+void PlaybackViewModel::enable_compositing(bool enable) {
+    session_.enable_compositing(enable);
+    notify_state_changed();
+}
+
+bool PlaybackViewModel::has_hardware_acceleration() const noexcept {
+    return session_.vulkan_device() != nullptr;
+}
+
+std::string PlaybackViewModel::hardware_device_name() const {
+    if (session_.vulkan_device()) {
+        return session_.vulkan_device()->info().device_name;
+    }
+    return "None (CPU Reference Compositor)";
+}
+
+PresentationResult PlaybackViewModel::update() {
+    return session_.update();
 }
 
 void PlaybackViewModel::play() {

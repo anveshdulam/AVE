@@ -336,7 +336,16 @@ std::string Timeline::to_json() const {
                 ss << "          \"timeline_in\": {\"num\": " << it.timeline_in().numerator() << ", \"den\": " << it.timeline_in().denominator() << "},\n";
                 ss << "          \"duration\": {\"num\": " << it.duration().numerator() << ", \"den\": " << it.duration().denominator() << "},\n";
                 ss << "          \"source_in\": {\"num\": " << it.source_in().numerator() << ", \"den\": " << it.source_in().denominator() << "},\n";
-                ss << "          \"speed\": {\"num\": " << it.speed().numerator() << ", \"den\": " << it.speed().denominator() << "}\n";
+                ss << "          \"speed\": {\"num\": " << it.speed().numerator() << ", \"den\": " << it.speed().denominator() << "},\n";
+                ss << "          \"transform_x\": " << it.transform_x() << ",\n";
+                ss << "          \"transform_y\": " << it.transform_y() << ",\n";
+                ss << "          \"scale_x\": " << it.scale_x() << ",\n";
+                ss << "          \"scale_y\": " << it.scale_y() << ",\n";
+                ss << "          \"rotation\": " << it.rotation() << ",\n";
+                ss << "          \"anchor_x\": " << it.anchor_x() << ",\n";
+                ss << "          \"anchor_y\": " << it.anchor_y() << ",\n";
+                ss << "          \"opacity\": " << it.opacity() << ",\n";
+                ss << "          \"blend_mode\": \"" << it.blend_mode() << "\"\n";
                 ss << "        }" << (i + 1 < t.items().size() ? "," : "") << "\n";
             }
             ss << "      ]\n";
@@ -403,6 +412,28 @@ int64_t extract_int_field(const std::string& json, const std::string& key, int64
     if (end_pos == pos) return default_val;
     try {
         return std::stoll(json.substr(pos, end_pos - pos));
+    } catch (...) {
+        return default_val;
+    }
+}
+
+float extract_float_field(const std::string& json, const std::string& key, float default_val = 0.0f) {
+    std::string needle = "\"" + key + "\":";
+    size_t pos = json.find(needle);
+    if (pos == std::string::npos) return default_val;
+    pos += needle.length();
+    while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) {
+        pos++;
+    }
+    if (pos >= json.length()) return default_val;
+    size_t end_pos = pos;
+    if (json[end_pos] == '-' || json[end_pos] == '+') end_pos++;
+    while (end_pos < json.length() && (std::isdigit(static_cast<unsigned char>(json[end_pos])) || json[end_pos] == '.')) {
+        end_pos++;
+    }
+    if (end_pos == pos) return default_val;
+    try {
+        return std::stof(json.substr(pos, end_pos - pos));
     } catch (...) {
         return default_val;
     }
@@ -519,6 +550,19 @@ Timeline Timeline::from_json(const std::string& json_text) {
 
                         TimelineItem item(std::move(it_id), std::move(it_clip_id), std::move(it_asset_id),
                                          std::move(it_name), it_tin, it_dur, it_sin, it_spd);
+                        item.set_transform(extract_float_field(item_json, "transform_x", 0.0f),
+                                           extract_float_field(item_json, "transform_y", 0.0f));
+                        item.set_scale(extract_float_field(item_json, "scale_x", 1.0f),
+                                       extract_float_field(item_json, "scale_y", 1.0f));
+                        item.set_rotation(extract_float_field(item_json, "rotation", 0.0f));
+                        item.set_anchor(extract_float_field(item_json, "anchor_x", 0.5f),
+                                        extract_float_field(item_json, "anchor_y", 0.5f));
+                        item.set_opacity(extract_float_field(item_json, "opacity", 1.0f));
+                        std::string it_bm = extract_string_field(item_json, "blend_mode");
+                        if (!it_bm.empty()) {
+                            item.set_blend_mode(std::move(it_bm));
+                        }
+
                         track.add_item(std::move(item));
 
                         i_cursor = it_end + 1;

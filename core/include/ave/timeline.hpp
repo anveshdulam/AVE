@@ -48,12 +48,32 @@ public:
     [[nodiscard]] Rational source_out() const noexcept { return source_in_ + (duration_ * speed_); }
     [[nodiscard]] bool enabled() const noexcept { return enabled_; }
 
+    [[nodiscard]] float transform_x() const noexcept { return transform_x_; }
+    [[nodiscard]] float transform_y() const noexcept { return transform_y_; }
+    [[nodiscard]] float scale_x() const noexcept { return scale_x_; }
+    [[nodiscard]] float scale_y() const noexcept { return scale_y_; }
+    [[nodiscard]] float rotation() const noexcept { return rotation_; }
+    [[nodiscard]] float anchor_x() const noexcept { return anchor_x_; }
+    [[nodiscard]] float anchor_y() const noexcept { return anchor_y_; }
+    [[nodiscard]] float opacity() const noexcept { return opacity_; }
+    [[nodiscard]] const std::string& blend_mode() const noexcept { return blend_mode_; }
+    [[nodiscard]] bool has_transform() const noexcept {
+        return transform_x_ != 0.0f || transform_y_ != 0.0f ||
+               scale_x_ != 1.0f || scale_y_ != 1.0f || rotation_ != 0.0f;
+    }
+
     void set_name(std::string name) { name_ = std::move(name); }
     void set_timeline_in(Rational in_pos) { timeline_in_ = in_pos; }
     void set_duration(Rational dur);
     void set_source_in(Rational src_in) { source_in_ = src_in; }
     void set_speed(Rational spd);
     void set_enabled(bool en) noexcept { enabled_ = en; }
+    void set_transform(float x, float y) noexcept { transform_x_ = x; transform_y_ = y; }
+    void set_scale(float sx, float sy) noexcept { scale_x_ = sx; scale_y_ = sy; }
+    void set_rotation(float degrees) noexcept { rotation_ = degrees; }
+    void set_anchor(float ax, float ay) noexcept { anchor_x_ = ax; anchor_y_ = ay; }
+    void set_opacity(float op) noexcept { opacity_ = std::clamp(op, 0.0f, 1.0f); }
+    void set_blend_mode(std::string mode) { blend_mode_ = std::move(mode); }
 
     [[nodiscard]] bool contains_time(Rational time) const noexcept {
         return time >= timeline_in_ && time < timeline_out();
@@ -73,6 +93,17 @@ private:
     Rational source_in_{0, 1};
     Rational speed_{1, 1};
     bool enabled_{true};
+
+    // Spatial transform and compositing properties
+    float transform_x_{0.0f};
+    float transform_y_{0.0f};
+    float scale_x_{1.0f};
+    float scale_y_{1.0f};
+    float rotation_{0.0f};
+    float anchor_x_{0.5f};
+    float anchor_y_{0.5f};
+    float opacity_{1.0f};
+    std::string blend_mode_{"Over"};
 };
 
 /**

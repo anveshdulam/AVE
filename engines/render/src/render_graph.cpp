@@ -156,7 +156,7 @@ void RenderGraph::clear() {
 }
 
 std::unique_ptr<RenderGraph> RenderGraph::build_for_timeline(const Timeline& timeline,
-                                                             Rational,
+                                                             Rational playhead_time,
                                                              const std::vector<VideoFrame>& track_frames,
                                                              const RenderContext&) {
     auto graph = std::make_unique<RenderGraph>();
@@ -174,23 +174,67 @@ std::unique_ptr<RenderGraph> RenderGraph::build_for_timeline(const Timeline& tim
     RenderNode* current_bottom = nullptr;
 
     for (size_t i = 0; i < v_tracks.size(); ++i) {
+        const auto& track = v_tracks[i];
+        if (track.muted()) {
+            continue;
+        }
+
+        const auto* item = track.item_at(playhead_time);
+        bool has_frame = (i < track_frames.size() && !track_frames[i].rgba_data.empty());
+
+        // Skip higher tracks if they have no active item and no frame
+        if (i > 0 && item == nullptr && !has_frame) {
+            continue;
+        }
+
         std::string src_name = "V" + std::to_string(i + 1) + "_Source";
         auto* src_node = graph->emplace_node<SourceNode>(src_name);
 
-        if (i < track_frames.size() && !track_frames[i].rgba_data.empty()) {
+        if (has_frame) {
             src_node->set_image(RenderImage::from_video_frame(track_frames[i]));
         } else {
+            // If bottom track has no media, synthesize black background; otherwise transparent
             src_node->set_solid_color(0, 0, 0, (i == 0) ? 255 : 0);
         }
 
+        RenderNode* layer_output = src_node;
+
+        // Apply spatial transform if configured on the item
+        if (item && item->has_transform()) {
+            std::string xform_name = "Xform_V" + std::to_string(i + 1);
+            auto* xform = graph->emplace_node<TransformNode>(xform_name);
+            xform->set_translation(item->transform_x(), item->transform_y());
+            xform->set_scale(item->scale_x(), item->scale_y());
+            xform->set_rotation(item->rotation());
+            xform->set_anchor(item->anchor_x(), item->anchor_y());
+            graph->connect(layer_output->id(), xform->id(), 0);
+            layer_output = xform;
+        }
+
+        // Apply layer opacity if configured on the item
+        if (item && item->opacity() < 0.999f) {
+            std::string opac_name = "Opacity_V" + std::to_string(i + 1);
+            auto* opac = graph->emplace_node<OpacityNode>(item->opacity(), opac_name);
+            graph->connect(layer_output->id(), opac->id(), 0);
+            layer_output = opac;
+        }
+
+        // Determine blend mode
+        BlendMode bm = BlendMode::Over;
+        if (item) {
+            if (item->blend_mode() == "Multiply") bm = BlendMode::Multiply;
+            else if (item->blend_mode() == "Screen") bm = BlendMode::Screen;
+            else if (item->blend_mode() == "Add") bm = BlendMode::Add;
+        }
+
         if (current_bottom == nullptr) {
-            current_bottom = src_node;
+            current_bottom = layer_output;
         } else {
             // Blend higher track over lower track
             std::string blend_name = "Blend_V" + std::to_string(i + 1);
-            auto* blend = graph->emplace_node<BlendNode>(BlendMode::Over, blend_name);
+            auto* blend = graph->emplace_node<BlendNode>(bm, blend_name);
             graph->connect(current_bottom->id(), blend->id(), 0); // Port 0: Background
-            graph->connect(src_node->id(), blend->id(), 1);       // Port 1: Foreground
+            graph->connect(layer_output->id(), blend->id(), 1);   // Port 1: Foreground
             current_bottom = blend;
         }
     }
@@ -198,6 +242,10 @@ std::unique_ptr<RenderGraph> RenderGraph::build_for_timeline(const Timeline& tim
     auto* out = graph->emplace_node<OutputNode>("Output");
     if (current_bottom) {
         graph->connect(current_bottom->id(), out->id(), 0);
+    } else {
+        auto* black = graph->emplace_node<SourceNode>("Black_Solid");
+        black->set_solid_color(0, 0, 0, 255);
+        graph->connect(black->id(), out->id(), 0);
     }
 
     graph->compile();

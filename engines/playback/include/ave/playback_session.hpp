@@ -9,6 +9,7 @@
 #include "ave/audio_ring_buffer.hpp"
 #include "ave/audio_device.hpp"
 #include "ave/stream_audio_decoder.hpp"
+#include "ave/render_graph.hpp"
 
 #include <memory>
 #include <mutex>
@@ -17,12 +18,16 @@
 
 namespace ave {
 
+class VulkanDevice;
+class VulkanCompositor;
+
 struct PlaybackSessionConfig {
     Rational prefetch_window{1, 1};       // 1 second lookahead
     size_t video_queue_capacity{12};      // 12 video frames
     uint32_t audio_sample_rate{48000};    // 48 kHz
     int audio_channels{2};                // Stereo
     size_t audio_buffer_frames{48000};    // 1 second ring buffer
+    bool enable_compositing{true};        // Multi-track compositing enabled by default
 };
 
 struct PresentationResult {
@@ -30,6 +35,8 @@ struct PresentationResult {
     FrameSyncAction action{FrameSyncAction::Hold};
     Rational presentation_time{0, 1};
     bool end_of_timeline{false};
+    bool is_composited{false};
+    size_t active_tracks_count{0};
 };
 
 struct SessionMetrics {
@@ -90,6 +97,13 @@ public:
     [[nodiscard]] AudioDevice* audio_device() noexcept { return audio_device_.get(); }
     void set_audio_device(std::unique_ptr<AudioDevice> device);
 
+    // Compositing engine control
+    void enable_compositing(bool enable) noexcept { config_.enable_compositing = enable; }
+    [[nodiscard]] bool is_compositing_enabled() const noexcept { return config_.enable_compositing; }
+    void set_vulkan_device(std::shared_ptr<VulkanDevice> device);
+    [[nodiscard]] std::shared_ptr<VulkanDevice> vulkan_device() const noexcept { return vulkan_device_; }
+    [[nodiscard]] std::shared_ptr<VulkanCompositor> vulkan_compositor() const noexcept { return vulkan_compositor_; }
+
     [[nodiscard]] SessionMetrics metrics() const;
 
 private:
@@ -103,6 +117,9 @@ private:
     AudioMixer audio_mixer_;
     AudioRingBuffer audio_ring_buffer_;
     std::unique_ptr<AudioDevice> audio_device_;
+
+    std::shared_ptr<VulkanDevice> vulkan_device_{nullptr};
+    std::shared_ptr<VulkanCompositor> vulkan_compositor_{nullptr};
 
     bool loop_{false};
 

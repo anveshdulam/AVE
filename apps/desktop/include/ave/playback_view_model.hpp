@@ -21,6 +21,12 @@ public:
     [[nodiscard]] Rational current_pts() const noexcept;
     [[nodiscard]] std::string current_timecode() const;
 
+    [[nodiscard]] bool is_compositing_enabled() const noexcept;
+    void enable_compositing(bool enable);
+    [[nodiscard]] bool has_hardware_acceleration() const noexcept;
+    [[nodiscard]] std::string hardware_device_name() const;
+    PresentationResult update();
+
     void play();
     void pause();
     void toggle_play();

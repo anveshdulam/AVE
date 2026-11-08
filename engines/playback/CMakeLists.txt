@@ -20,7 +20,7 @@ if(TARGET FFmpeg::FFmpeg)
         $<INSTALL_INTERFACE:include>
     )
 
-    target_link_libraries(ave_playback PUBLIC ave_core ave_audio FFmpeg::FFmpeg)
+    target_link_libraries(ave_playback PUBLIC ave_core ave_audio ave_render FFmpeg::FFmpeg)
     target_compile_features(ave_playback PUBLIC cxx_std_20)
 else()
     message(STATUS "FFmpeg not found; ave_playback build deferred.")
