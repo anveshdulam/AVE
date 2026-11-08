@@ -217,6 +217,36 @@ Track* Timeline::find_track_mut(const std::string& track_id) noexcept {
     return nullptr;
 }
 
+const Track* Timeline::find_track_for_item(const std::string& item_id) const noexcept {
+    for (const auto& t : video_tracks_) {
+        if (t.find_item(item_id)) return &t;
+    }
+    for (const auto& t : audio_tracks_) {
+        if (t.find_item(item_id)) return &t;
+    }
+    return nullptr;
+}
+
+Track* Timeline::find_track_for_item_mut(const std::string& item_id) noexcept {
+    for (auto& t : video_tracks_) {
+        if (t.find_item(item_id)) return &t;
+    }
+    for (auto& t : audio_tracks_) {
+        if (t.find_item(item_id)) return &t;
+    }
+    return nullptr;
+}
+
+const TimelineItem* Timeline::find_item(const std::string& item_id) const noexcept {
+    const Track* t = find_track_for_item(item_id);
+    return t ? t->find_item(item_id) : nullptr;
+}
+
+TimelineItem* Timeline::find_item_mut(const std::string& item_id) noexcept {
+    Track* t = find_track_for_item_mut(item_id);
+    return t ? t->find_item_mut(item_id) : nullptr;
+}
+
 Rational Timeline::duration() const noexcept {
     Rational max_dur{0, 1};
     for (const auto& t : video_tracks_) {

@@ -62,3 +62,4 @@ However, to achieve a true non-linear editor (NLE) playback experience (Phase 3 
   - 100% test pass rate across all 14 automated test suites locally and in CI.
 - **Negative:**
   - Multi-track timeline evaluation dynamically allocates RenderGraph nodes per frame; a retained-graph or node-caching optimization may be evaluated in future performance tuning.
+

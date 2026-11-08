@@ -1,9 +1,9 @@
 # Autonomous Video Editor — Project Status
 
 ## Project Baseline
-- **Milestone:** Phase 3 — GPU Render Graph & Vulkan Compositor (COMPLETE)
+- **Milestone:** Phase 4 — Command Bus and Undo/Redo Engine (COMPLETE)
 - **Date:** 2026-11-08
-- **Architecture Status:** 5-layer system and ADRs 0001–0009 established.
+- **Architecture Status:** 5-layer system and ADRs 0001–0010 established.
 - **Hardware Profile (Audited):**
   - CPU: Intel(R) Core(TM) Ultra 5 125H (14 cores: 4P + 8E + 2LPE, 18 logical threads)
   - RAM: 16 GB LPDDR5X (7467 MT/s)
@@ -73,32 +73,44 @@
 | Presentation Shell Compositing Integration | **Complete** | `PlaybackViewModel` and desktop app shell display hardware accelerator profile and compositing status |
 | Multi-Track Compositing Integration Test | **Complete** | `ave_compositing_integration_test` (multi-track PiP compositing, 50% scale, 80% opacity, track muting, seek, timecode) |
 | Phase 3 Exit Gate | **MET** | Complete real-time GPU/CPU compositing pipeline verified with 14/14 automated tests passing 100% |
-| **Phase 4: Non-Destructive Editing & Command Bus Undo/Redo** | **NEXT** | Typed Command hierarchy, CommandHistory, undo/redo stacks, dirty tracking, transaction batching |
+| **Phase 4: Non-Destructive Editing & Command Bus Undo/Redo** | **COMPLETE** | Typed Command hierarchy, CommandHistory, undo/redo stacks, dirty tracking, transaction batching |
+| Architecture Decision Record | **Complete** | ADR-0010 (Command Bus, Typed Mutations, and Transactional Undo/Redo Engine) |
+| Command Contract & Structured Result | **Complete** | `ave::Command`, `ave::CommandResult`, `ave::CommandStatus`, `ave::CommandOrigin` in `core/include/ave/command.hpp` |
+| Clip Insertion & Deletion Commands | **Complete** | `ave::InsertClipCommand` (overlap validation) and `ave::DeleteClipCommand` (snapshot stashing) |
+| Clip Movement & Repositioning | **Complete** | `ave::MoveClipCommand` (cross-track or temporal relocation with destination collision avoidance) |
+| Non-Destructive Blade Split Command | **Complete** | `ave::SplitClipCommand` (blade cut at PTS; symmetric undo restores single original clip) |
+| Visual Transform Mutation Command | **Complete** | `ave::SetTransformCommand` (reversible modification of position, scale, rotation, anchor, opacity, blend mode) |
+| Track Mute Command | **Complete** | `ave::SetTrackMuteCommand` (track audio/video mute toggle with reversible state) |
+| Composite Macro Transactions | **Complete** | `ave::CompositeCommand` (atomic multi-command grouping with automatic rollback on sub-command failure) |
+| Command History & Dirty Tracking | **Complete** | `ave::CommandHistory` (bounded undo/redo stacks, save-point dirty tracking `is_dirty()`, listener notifications) |
+| Phase 4 Unit & Integration Test | **Complete** | `ave_command_bus_test` (apply/revert symmetry, transaction rollback, dirty state tracking, listener callbacks) |
+| Phase 4 Exit Gate | **MET** | Command Bus engine verified with 15/15 automated tests passing 100% |
+| **Phase 5: Project Serialization & OpenTimelineIO Interchange** | **NEXT** | Versioned project schema (`.aveproj`), OpenTimelineIO importer/exporter, asset relinking |
 
 ---
 
 ## Test Verification Summary
-All 14 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
+All 15 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
 1. `VulkanProbeTest` — Physical GPU enumeration (Intel Arc Graphics 0x7d55, Vulkan 1.4.325)
 2. `SmokeTest` — Canonical rational time arithmetic & frame conversion
 3. `MediaAssetTest` — UUID generation, stream mapping, JSON serialization round-trip
 4. `MediaPoolTest` — Bin hierarchies, non-destructive sub-clipping, clip moving, case-insensitive search
 5. `TimelineTest` — Multi-track timeline, item placement, overlap prevention, active item query, blade cut, transform/opacity serialization, and JSON roundtrip
-6. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
-7. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
-8. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
-9. `CompositingIntegrationTest` — End-to-end multi-track picture-in-picture compositing, spatial transform, opacity, track mute, seeking, and frame accuracy
-10. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
-11. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
-12. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
-13. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
-14. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
+6. `CommandBusTest` — Command contract, typed commands (Insert, Delete, Move, Split, Transform, Mute), CompositeCommand rollback, undo/redo stacks, and dirty tracking
+7. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
+8. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
+9. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
+10. `CompositingIntegrationTest` — End-to-end multi-track picture-in-picture compositing, spatial transform, opacity, track mute, seeking, and frame accuracy
+11. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
+12. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
+13. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
+14. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
+15. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
 
 ---
 
-## Next Steps in Phase 4
-1. Review `.agents/skills/command-bus-undo/SKILL.md`.
-2. Design and implement the typed Command Bus architecture (`ave::Command`, `ave::CommandResult`, `ave::CommandHistory`).
-3. Implement core timeline edit commands: `InsertClipCommand`, `DeleteClipCommand`, `MoveClipCommand`, `SplitClipCommand`, `SetTransformCommand`, `SetTrackMuteCommand`.
-4. Implement atomic transaction batching (`CompositeCommand`) and dirty-state project change tracking.
-5. Create comprehensive unit and integration tests (`ave_command_bus_test`).
+## Next Steps in Phase 5
+1. Review `.agents/skills/edit-plan-schema/SKILL.md` and `.agents/skills/timeline-project-model/SKILL.md`.
+2. Define versioned native project format (`.aveproj`) containing Timeline, MediaPool, and Editor View state.
+3. Implement OpenTimelineIO (OTIO) interchange adapter for importing and exporting industry standard timelines.
+4. Implement offline media relinking and asset reconciliation.

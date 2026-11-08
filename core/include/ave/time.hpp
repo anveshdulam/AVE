@@ -30,6 +30,10 @@ public:
         return static_cast<double>(m_num) / static_cast<double>(m_den);
     }
 
+    [[nodiscard]] std::string to_string() const {
+        return std::to_string(m_num) + "/" + std::to_string(m_den);
+    }
+
     [[nodiscard]] int64_t to_frames(const Rational& frame_rate) const {
         // frames = (m_num / m_den) * (frame_rate.num / frame_rate.den)
         // frames = (m_num * frame_rate.num) / (m_den * frame_rate.den)

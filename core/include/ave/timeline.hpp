@@ -176,6 +176,10 @@ public:
 
     [[nodiscard]] const Track* find_track(const std::string& track_id) const noexcept;
     Track* find_track_mut(const std::string& track_id) noexcept;
+    [[nodiscard]] const Track* find_track_for_item(const std::string& item_id) const noexcept;
+    Track* find_track_for_item_mut(const std::string& item_id) noexcept;
+    [[nodiscard]] const TimelineItem* find_item(const std::string& item_id) const noexcept;
+    TimelineItem* find_item_mut(const std::string& item_id) noexcept;
 
     [[nodiscard]] Rational duration() const noexcept;
 
