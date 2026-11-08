@@ -107,6 +107,9 @@ public:
     [[nodiscard]] Rational duration() const noexcept { return duration_seconds_; }
     [[nodiscard]] const std::vector<SourceStream>& streams() const noexcept { return streams_; }
 
+    void set_file_path(std::filesystem::path path) { file_path_ = std::move(path); }
+    void set_file_size_bytes(uint64_t size) noexcept { file_size_bytes_ = size; }
+
     [[nodiscard]] const SourceStream* primary_video_stream() const noexcept;
     [[nodiscard]] const SourceStream* primary_audio_stream() const noexcept;
 

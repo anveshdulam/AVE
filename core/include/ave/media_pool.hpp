@@ -91,6 +91,7 @@ public:
     // Asset Management
     const MediaAsset& register_asset(MediaAsset asset);
     [[nodiscard]] const MediaAsset* find_asset(const std::string& asset_id) const noexcept;
+    MediaAsset* find_asset_mut(const std::string& asset_id) noexcept;
     bool remove_asset(const std::string& asset_id);
     [[nodiscard]] size_t asset_count() const noexcept { return assets_.size(); }
     [[nodiscard]] const std::unordered_map<std::string, MediaAsset>& assets() const noexcept { return assets_; }

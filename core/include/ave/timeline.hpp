@@ -40,6 +40,7 @@ public:
     [[nodiscard]] const std::string& clip_id() const noexcept { return clip_id_; }
     [[nodiscard]] const std::string& asset_id() const noexcept { return asset_id_; }
     [[nodiscard]] const std::string& name() const noexcept { return name_; }
+    void set_name(std::string name) { name_ = std::move(name); }
     [[nodiscard]] Rational timeline_in() const noexcept { return timeline_in_; }
     [[nodiscard]] Rational duration() const noexcept { return duration_; }
     [[nodiscard]] Rational timeline_out() const noexcept { return timeline_in_ + duration_; }
@@ -62,7 +63,6 @@ public:
                scale_x_ != 1.0f || scale_y_ != 1.0f || rotation_ != 0.0f;
     }
 
-    void set_name(std::string name) { name_ = std::move(name); }
     void set_timeline_in(Rational in_pos) { timeline_in_ = in_pos; }
     void set_duration(Rational dur);
     void set_source_in(Rational src_in) { source_in_ = src_in; }
@@ -116,6 +116,7 @@ public:
 
     [[nodiscard]] const std::string& id() const noexcept { return id_; }
     [[nodiscard]] const std::string& name() const noexcept { return name_; }
+    void set_name(std::string name) { name_ = std::move(name); }
     [[nodiscard]] TrackType type() const noexcept { return type_; }
     [[nodiscard]] int index() const noexcept { return index_; }
     [[nodiscard]] bool muted() const noexcept { return muted_; }
@@ -123,7 +124,6 @@ public:
     [[nodiscard]] bool locked() const noexcept { return locked_; }
     [[nodiscard]] const std::vector<TimelineItem>& items() const noexcept { return items_; }
 
-    void set_name(std::string name) { name_ = std::move(name); }
     void set_muted(bool m) noexcept { muted_ = m; }
     void set_soloed(bool s) noexcept { soloed_ = s; }
     void set_locked(bool l) noexcept { locked_ = l; }
@@ -163,6 +163,7 @@ public:
 
     [[nodiscard]] const std::string& id() const noexcept { return id_; }
     [[nodiscard]] const std::string& name() const noexcept { return name_; }
+    void set_name(std::string name) { name_ = std::move(name); }
     [[nodiscard]] Rational frame_rate() const noexcept { return frame_rate_; }
     [[nodiscard]] int width() const noexcept { return width_; }
     [[nodiscard]] int height() const noexcept { return height_; }

@@ -87,6 +87,11 @@ const MediaAsset* MediaPool::find_asset(const std::string& asset_id) const noexc
     return it != assets_.end() ? &it->second : nullptr;
 }
 
+MediaAsset* MediaPool::find_asset_mut(const std::string& asset_id) noexcept {
+    auto it = assets_.find(asset_id);
+    return it != assets_.end() ? &it->second : nullptr;
+}
+
 bool MediaPool::remove_asset(const std::string& asset_id) {
     auto it = assets_.find(asset_id);
     if (it == assets_.end()) return false;
@@ -300,6 +305,256 @@ std::string MediaPool::to_json() const {
     ss << "  ]\n";
     ss << "}";
     return ss.str();
+}
+
+namespace {
+
+std::string pool_extract_string(const std::string& json, const std::string& key) {
+    std::string needle = "\"" + key + "\":";
+    size_t pos = json.find(needle);
+    if (pos == std::string::npos) return "";
+    pos += needle.length();
+    while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) {
+        pos++;
+    }
+    if (pos >= json.length() || json[pos] != '"') return "";
+    pos++;
+    std::string result;
+    while (pos < json.length()) {
+        if (json[pos] == '\\' && pos + 1 < json.length()) {
+            pos++;
+            switch (json[pos]) {
+                case '"': result += '"'; break;
+                case '\\': result += '\\'; break;
+                case 'n': result += '\n'; break;
+                case 'r': result += '\r'; break;
+                case 't': result += '\t'; break;
+                default: result += json[pos]; break;
+            }
+        } else if (json[pos] == '"') {
+            break;
+        } else {
+            result += json[pos];
+        }
+        pos++;
+    }
+    return result;
+}
+
+int64_t pool_extract_int(const std::string& json, const std::string& key, int64_t default_val = 0) {
+    std::string needle = "\"" + key + "\":";
+    size_t pos = json.find(needle);
+    if (pos == std::string::npos) return default_val;
+    pos += needle.length();
+    while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) {
+        pos++;
+    }
+    if (pos >= json.length()) return default_val;
+    size_t end_pos = pos;
+    if (json[end_pos] == '-' || json[end_pos] == '+') end_pos++;
+    while (end_pos < json.length() && std::isdigit(static_cast<unsigned char>(json[end_pos]))) {
+        end_pos++;
+    }
+    if (end_pos == pos) return default_val;
+    try {
+        return std::stoll(json.substr(pos, end_pos - pos));
+    } catch (...) {
+        return default_val;
+    }
+}
+
+Rational pool_extract_rational(const std::string& json, const std::string& key) {
+    std::string needle = "\"" + key + "\":";
+    size_t pos = json.find(needle);
+    if (pos == std::string::npos) return Rational{0, 1};
+    size_t obj_start = json.find('{', pos);
+    size_t obj_end = json.find('}', obj_start);
+    if (obj_start == std::string::npos || obj_end == std::string::npos) return Rational{0, 1};
+    std::string obj_sub = json.substr(obj_start, obj_end - obj_start + 1);
+    int64_t num = pool_extract_int(obj_sub, "num", 0);
+    int64_t den = pool_extract_int(obj_sub, "den", 1);
+    return Rational{num, den};
+}
+
+} // namespace
+
+MediaPool MediaPool::from_json(const std::string& json_text) {
+    MediaPool pool;
+    pool.bins_.clear();
+    pool.assets_.clear();
+    pool.clips_.clear();
+
+    std::string root_id = pool_extract_string(json_text, "root_bin_id");
+    if (!root_id.empty()) {
+        pool.root_bin_id_ = root_id;
+    }
+
+    // 1. Parse Assets
+    size_t assets_pos = json_text.find("\"assets\":");
+    if (assets_pos != std::string::npos) {
+        size_t arr_start = json_text.find('[', assets_pos);
+        if (arr_start != std::string::npos) {
+            size_t cursor = arr_start + 1;
+            while (cursor < json_text.length()) {
+                size_t obj_start = json_text.find('{', cursor);
+                if (obj_start == std::string::npos) break;
+
+                // Match braces
+                int brace_count = 0;
+                size_t obj_end = obj_start;
+                for (; obj_end < json_text.length(); ++obj_end) {
+                    if (json_text[obj_end] == '{') brace_count++;
+                    else if (json_text[obj_end] == '}') {
+                        brace_count--;
+                        if (brace_count == 0) break;
+                    }
+                }
+                if (brace_count != 0) break;
+
+                std::string asset_json = json_text.substr(obj_start, obj_end - obj_start + 1);
+                try {
+                    MediaAsset asset = MediaAsset::from_json(asset_json);
+                    pool.assets_[asset.id()] = std::move(asset);
+                } catch (...) {}
+
+                cursor = obj_end + 1;
+                size_t next_bracket = json_text.find(']', cursor);
+                size_t next_brace = json_text.find('{', cursor);
+                if (next_bracket != std::string::npos && (next_brace == std::string::npos || next_bracket < next_brace)) {
+                    break;
+                }
+            }
+        }
+    }
+
+    // 2. Parse Clips
+    size_t clips_pos = json_text.find("\"clips\":");
+    if (clips_pos != std::string::npos) {
+        size_t arr_start = json_text.find('[', clips_pos);
+        if (arr_start != std::string::npos) {
+            size_t cursor = arr_start + 1;
+            while (cursor < json_text.length()) {
+                size_t obj_start = json_text.find('{', cursor);
+                if (obj_start == std::string::npos) break;
+
+                int brace_count = 0;
+                size_t obj_end = obj_start;
+                for (; obj_end < json_text.length(); ++obj_end) {
+                    if (json_text[obj_end] == '{') brace_count++;
+                    else if (json_text[obj_end] == '}') {
+                        brace_count--;
+                        if (brace_count == 0) break;
+                    }
+                }
+                if (brace_count != 0) break;
+
+                std::string clip_json = json_text.substr(obj_start, obj_end - obj_start + 1);
+                std::string cid = pool_extract_string(clip_json, "id");
+                std::string aid = pool_extract_string(clip_json, "asset_id");
+                std::string name = pool_extract_string(clip_json, "name");
+                std::string color = pool_extract_string(clip_json, "color_tag");
+                Rational s_in = pool_extract_rational(clip_json, "source_in");
+                Rational s_out = pool_extract_rational(clip_json, "source_out");
+
+                if (!cid.empty() && s_out >= s_in) {
+                    MediaClip clip(cid, aid, name, s_in, s_out);
+                    if (!color.empty()) clip.set_color_tag(color);
+                    pool.clips_[cid] = std::move(clip);
+                }
+
+                cursor = obj_end + 1;
+                size_t next_bracket = json_text.find(']', cursor);
+                size_t next_brace = json_text.find('{', cursor);
+                if (next_bracket != std::string::npos && (next_brace == std::string::npos || next_bracket < next_brace)) {
+                    break;
+                }
+            }
+        }
+    }
+
+    // 3. Parse Bins
+    size_t bins_pos = json_text.find("\"bins\":");
+    if (bins_pos != std::string::npos) {
+        size_t arr_start = json_text.find('[', bins_pos);
+        if (arr_start != std::string::npos) {
+            size_t cursor = arr_start + 1;
+            while (cursor < json_text.length()) {
+                size_t obj_start = json_text.find('{', cursor);
+                if (obj_start == std::string::npos) break;
+
+                int brace_count = 0;
+                size_t obj_end = obj_start;
+                for (; obj_end < json_text.length(); ++obj_end) {
+                    if (json_text[obj_end] == '{') brace_count++;
+                    else if (json_text[obj_end] == '}') {
+                        brace_count--;
+                        if (brace_count == 0) break;
+                    }
+                }
+                if (brace_count != 0) break;
+
+                std::string bin_json = json_text.substr(obj_start, obj_end - obj_start + 1);
+                std::string bid = pool_extract_string(bin_json, "id");
+                std::string bname = pool_extract_string(bin_json, "name");
+                std::string parent = pool_extract_string(bin_json, "parent_id");
+
+                if (!bid.empty()) {
+                    MediaBin bin(bid, bname, parent);
+
+                    // Parse clip_ids
+                    size_t c_pos = bin_json.find("\"clip_ids\":");
+                    if (c_pos != std::string::npos) {
+                        size_t c_arr_start = bin_json.find('[', c_pos);
+                        size_t c_arr_end = bin_json.find(']', c_arr_start);
+                        if (c_arr_start != std::string::npos && c_arr_end != std::string::npos) {
+                            size_t c_cur = c_arr_start;
+                            while (c_cur < c_arr_end) {
+                                size_t q1 = bin_json.find('"', c_cur);
+                                if (q1 == std::string::npos || q1 >= c_arr_end) break;
+                                size_t q2 = bin_json.find('"', q1 + 1);
+                                if (q2 == std::string::npos || q2 > c_arr_end) break;
+                                bin.add_clip(bin_json.substr(q1 + 1, q2 - q1 - 1));
+                                c_cur = q2 + 1;
+                            }
+                        }
+                    }
+
+                    // Parse child_bin_ids
+                    size_t b_pos = bin_json.find("\"child_bin_ids\":");
+                    if (b_pos != std::string::npos) {
+                        size_t b_arr_start = bin_json.find('[', b_pos);
+                        size_t b_arr_end = bin_json.find(']', b_arr_start);
+                        if (b_arr_start != std::string::npos && b_arr_end != std::string::npos) {
+                            size_t b_cur = b_arr_start;
+                            while (b_cur < b_arr_end) {
+                                size_t q1 = bin_json.find('"', b_cur);
+                                if (q1 == std::string::npos || q1 >= b_arr_end) break;
+                                size_t q2 = bin_json.find('"', q1 + 1);
+                                if (q2 == std::string::npos || q2 > b_arr_end) break;
+                                bin.add_child_bin(bin_json.substr(q1 + 1, q2 - q1 - 1));
+                                b_cur = q2 + 1;
+                            }
+                        }
+                    }
+
+                    pool.bins_[bid] = std::move(bin);
+                }
+
+                cursor = obj_end + 1;
+                size_t next_bracket = json_text.find(']', cursor);
+                size_t next_brace = json_text.find('{', cursor);
+                if (next_bracket != std::string::npos && (next_brace == std::string::npos || next_bracket < next_brace)) {
+                    break;
+                }
+            }
+        }
+    }
+
+    if (pool.bins_.find(pool.root_bin_id_) == pool.bins_.end()) {
+        pool.bins_[pool.root_bin_id_] = MediaBin(pool.root_bin_id_, "Master Bin", "");
+    }
+
+    return pool;
 }
 
 } // namespace ave

@@ -5,6 +5,9 @@ add_library(ave_core STATIC
     src/media_pool.cpp
     src/timeline.cpp
     src/command.cpp
+    src/project.cpp
+    src/otio_interchange.cpp
+    src/asset_relinker.cpp
     include/ave/time.hpp
     include/ave/timecode.hpp
     include/ave/uuid.hpp
@@ -13,6 +16,9 @@ add_library(ave_core STATIC
     include/ave/timeline.hpp
     include/ave/video_frame.hpp
     include/ave/command.hpp
+    include/ave/project.hpp
+    include/ave/otio_interchange.hpp
+    include/ave/asset_relinker.hpp
 )
 
 target_include_directories(ave_core PUBLIC

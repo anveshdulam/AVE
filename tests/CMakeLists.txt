@@ -23,12 +23,17 @@ add_executable(ave_command_bus_test command_bus_test.cpp)
 target_link_libraries(ave_command_bus_test PRIVATE ave_core)
 target_compile_features(ave_command_bus_test PRIVATE cxx_std_20)
 
+add_executable(ave_project_persistence_test project_persistence_test.cpp)
+target_link_libraries(ave_project_persistence_test PRIVATE ave_core)
+target_compile_features(ave_project_persistence_test PRIVATE cxx_std_20)
+
 include(CTest)
 add_test(NAME SmokeTest COMMAND ave_smoke_test)
 add_test(NAME MediaAssetTest COMMAND ave_media_asset_test)
 add_test(NAME MediaPoolTest COMMAND ave_media_pool_test)
 add_test(NAME TimelineTest COMMAND ave_timeline_test)
 add_test(NAME CommandBusTest COMMAND ave_command_bus_test)
+add_test(NAME ProjectPersistenceTest COMMAND ave_project_persistence_test "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sample_test.mp4")
 
 if(WIN32 AND EXISTS "${FFmpeg_INCLUDE_DIR}/../bin")
     file(GLOB FFMPEG_RUNTIME_DLLS "${FFmpeg_INCLUDE_DIR}/../bin/*.dll")

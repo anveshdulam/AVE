@@ -507,3 +507,4 @@ void CommandHistory::notify_listeners() {
 }
 
 } // namespace ave
+
