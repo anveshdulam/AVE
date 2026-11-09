@@ -67,6 +67,11 @@ if(TARGET ave_ai)
     target_link_libraries(ave_visual_perception_test PRIVATE ave_ai ave_core)
     target_compile_features(ave_visual_perception_test PRIVATE cxx_std_20)
     add_test(NAME VisualPerceptionTest COMMAND ave_visual_perception_test)
+
+    add_executable(ave_fingerprint_test fingerprint_test.cpp)
+    target_link_libraries(ave_fingerprint_test PRIVATE ave_ai ave_core)
+    target_compile_features(ave_fingerprint_test PRIVATE cxx_std_20)
+    add_test(NAME FingerprintTest COMMAND ave_fingerprint_test)
 endif()
 
 if(WIN32 AND EXISTS "${FFmpeg_INCLUDE_DIR}/../bin")

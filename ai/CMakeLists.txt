@@ -10,6 +10,7 @@ add_library(ave_ai STATIC
     src/shot_detector.cpp
     src/audio_perception.cpp
     src/visual_perception.cpp
+    src/reference_fingerprint.cpp
     include/ave/analysis_proxy.hpp
     include/ave/perception_cache.hpp
     include/ave/perception_report.hpp
@@ -21,6 +22,7 @@ add_library(ave_ai STATIC
     include/ave/shot_detector.hpp
     include/ave/audio_perception.hpp
     include/ave/visual_perception.hpp
+    include/ave/reference_fingerprint.hpp
 )
 
 target_include_directories(ave_ai PUBLIC

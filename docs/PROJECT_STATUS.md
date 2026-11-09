@@ -138,12 +138,22 @@
 | Unified Visual Perception Pipeline | **Complete** | `ave::VisualPerceptionPipeline` (color, motion curve, keyframe indexing, and PerceptionReport integration) |
 | Phase 7D Unit & Integration Test | **Complete** | `ave_visual_perception_test` (color look, motion energy, 1152-d normalization, nearest-neighbor retrieval) |
 | Phase 7D Exit Gate | **MET** | Visual perception and search index verified with 21/21 automated tests passing 100% |
-| **Phase 7E: Reference Fingerprint v2** | **NEXT** | Multi-dimensional editing distribution (pacing, cut-to-beat, motion, color) & mathematical distance metric |
+| **Phase 7E: Reference Fingerprint v2** | **COMPLETE** | Multi-dimensional editing distribution (pacing, cut-to-beat, motion, color) & mathematical distance metric |
+| Architecture Decision Record | **Complete** | ADR-0017 (Reference Fingerprint v2 and Mathematical Distance Metric) |
+| Multi-Dimensional Pacing Distribution | **Complete** | `ShotLengthDistribution` (median, Q1/Q3 percentiles, IQR, burstiness parameter in [-1.0, 1.0]) |
+| Cut-to-Beat Phase Distribution | **Complete** | `CutToBeatDistribution` (beat sync ratio within +/-70ms, downbeat ratio, signed ms offset) |
+| Transition Mix & Motion Variance | **Complete** | `TransitionMix` (hard cut, dissolve, fade proportions) & `MotionProfile` (mean energy and variance) |
+| Universal Dual Extractor | **Complete** | `FingerprintEngine::from_perception_report` & `FingerprintEngine::from_timeline` |
+| Normalized Distance Function | **Complete** | `FingerprintEngine::compute_distance` (D(F1, F2) in [0.0, 1.0], metric identity, symmetry, bounds) |
+| Detailed Distance Breakdown | **Complete** | `FingerprintEngine::compute_distance_detailed` (pacing, rhythm, transition, motion, color distances) |
+| Phase 7E Unit & Integration Test | **Complete** | `ave_fingerprint_test` (pacing, burstiness, beat phase, metric identity/symmetry, timeline extraction, JSON) |
+| Phase 7E Exit Gate | **MET** | Reference Fingerprint v2 verified with 22/22 automated tests passing 100% |
+| **Phase 7F: Deterministic Planner & Hardened Bridge** | **NEXT** | Dynamic programming / beam search beat-grid cutter, proposal validator, single-transaction CompositeCommand commit/undo |
 
 ---
 
 ## Test Verification Summary
-All 21 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
+All 22 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
 1. `VulkanProbeTest` — Physical GPU enumeration (Intel Arc Graphics 0x7d55, Vulkan 1.4.325)
 2. `SmokeTest` — Canonical rational time arithmetic & frame conversion
 3. `MediaAssetTest` — UUID generation, stream mapping, JSON serialization round-trip
@@ -156,19 +166,20 @@ All 21 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
 10. `ShotDetectorTest` — Color histogram & ECR deltas, TransNetV2 rolling window, frame-accurate cut refinement, dissolve ranges, keyframe selection, and SyntheticEvalHarness evaluation
 11. `AudioPerceptionTest` — Spectral flux transient detection, EBU R128 LUFS loudness, Beat This! rhythm/downbeats, sub-millisecond transient snapping, Silero VAD segmentation, and word token timestamps
 12. `VisualPerceptionTest` — CIE L*a*b* color look, luminance contrast, inter-frame motion energy, SigLIP 2 1152-d embedding extraction, and cosine vector search index
-13. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
-14. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
-15. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
-16. `CompositingIntegrationTest` — End-to-end multi-track picture-in-picture compositing, spatial transform, opacity, track mute, seeking, and frame accuracy
-17. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
-18. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
-19. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
-20. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
-21. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
+13. `FingerprintTest` — Multi-dimensional editing style distribution, burstiness, cut-to-beat phase, mathematical distance metric D(F1, F2), timeline extraction, and JSON roundtrip
+14. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
+15. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
+16. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
+17. `CompositingIntegrationTest` — End-to-end multi-track picture-in-picture compositing, spatial transform, opacity, track mute, seeking, and frame accuracy
+18. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
+19. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
+20. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
+21. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
+22. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
 
 ---
 
-## Next Steps in Phase 7E (Reference Fingerprint v2)
-1. Design multi-dimensional editing distribution: shot length distribution (median, IQR, burstiness), cut-to-beat phase distribution, transition mix, motion energy trajectory, color look, and loudness profile.
-2. Implement mathematical distance metric $D(F_{\text{ref}}, F_{\text{target}})$ scoring how closely a candidate timeline matches a reference style.
-3. Author ADR-0017 and register `ave_fingerprint_test` (Test Suite #22).
+## Next Steps in Phase 7F (Deterministic Planner & Hardened Bridge)
+1. Build deterministic beat-grid cutter: candidate cut points from beat grid, weighted by section energy.
+2. Implement Dynamic Programming / Beam Search solver choosing clips by cost mixing embedding similarity, motion match, no-repeat penalty, and speech boundaries.
+3. Validate proposed edits against schema, dry-run on cloned timeline, diff preview, and commit as single atomic `CompositeCommand`.
