@@ -398,6 +398,59 @@ PerceptionReport PerceptionReport::from_json(const std::string& json_str) {
         }
     }
 
+    // Parse speech
+    size_t speech_pos = json_str.find("\"speech\":");
+    if (speech_pos != std::string::npos) {
+        size_t segs_pos = json_str.find("\"segments\":", speech_pos);
+        if (segs_pos != std::string::npos) {
+            size_t arr_start = json_str.find('[', segs_pos);
+            size_t arr_end = find_matching_bracket(json_str, arr_start);
+            if (arr_start != std::string::npos && arr_end != std::string::npos) {
+                size_t cursor = arr_start + 1;
+                while (cursor < arr_end) {
+                    size_t obj_start = json_str.find('{', cursor);
+                    if (obj_start == std::string::npos || obj_start >= arr_end) break;
+                    size_t obj_end = find_matching_brace(json_str, obj_start);
+                    if (obj_end == std::string::npos || obj_end > arr_end) break;
+
+                    std::string item_json = json_str.substr(obj_start, obj_end - obj_start + 1);
+                    SpeechSegment seg;
+                    seg.start_pts = extract_rational(item_json, "start");
+                    seg.end_pts = extract_rational(item_json, "end");
+                    seg.confidence = extract_double(item_json, "confidence", 1.0);
+                    report.speech.segments.push_back(seg);
+
+                    cursor = obj_end + 1;
+                }
+            }
+        }
+
+        size_t words_pos = json_str.find("\"words\":", speech_pos);
+        if (words_pos != std::string::npos) {
+            size_t arr_start = json_str.find('[', words_pos);
+            size_t arr_end = find_matching_bracket(json_str, arr_start);
+            if (arr_start != std::string::npos && arr_end != std::string::npos) {
+                size_t cursor = arr_start + 1;
+                while (cursor < arr_end) {
+                    size_t obj_start = json_str.find('{', cursor);
+                    if (obj_start == std::string::npos || obj_start >= arr_end) break;
+                    size_t obj_end = find_matching_brace(json_str, obj_start);
+                    if (obj_end == std::string::npos || obj_end > arr_end) break;
+
+                    std::string item_json = json_str.substr(obj_start, obj_end - obj_start + 1);
+                    WordTimestamp word;
+                    word.word = extract_string(item_json, "word");
+                    word.start_pts = extract_rational(item_json, "start");
+                    word.end_pts = extract_rational(item_json, "end");
+                    word.confidence = extract_double(item_json, "confidence", 1.0);
+                    report.speech.words.push_back(word);
+
+                    cursor = obj_end + 1;
+                }
+            }
+        }
+    }
+
     // Parse visual
     size_t visual_pos = json_str.find("\"visual\":");
     if (visual_pos != std::string::npos) {
