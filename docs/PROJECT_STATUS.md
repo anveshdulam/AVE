@@ -104,12 +104,21 @@
 | Professional QML Desktop Layout | **Complete** | Dark-themed QML workspace (`main.qml`, `ToolbarView.qml`, `TrackHeaderView.qml`, `TimelineCanvas.qml`, `InspectorView.qml`) |
 | Phase 6 Unit & Integration Test | **Complete** | `ave_timeline_ui_test` (viewport projection, snapping verification, tool transitions, inspector transforms, undo/redo) |
 | Phase 6 Exit Gate | **MET** | Presentation layer and interaction engine verified with 17/17 automated tests passing 100% |
-| **Phase 7: Local AI Video Perception & Reference Pipeline** | **NEXT** | Local reference video analysis, shot boundary detection, scene understanding, motion/beat extraction |
+| **Phase 7A: Local Perception Infrastructure & Eval Harness** | **COMPLETE** | Analysis proxy pipeline, content-keyed perception cache, priority job scheduler, and synthetic ground truth harness |
+| Architecture Decision Record | **Complete** | ADR-0013 (Local AI Video Perception Infrastructure, Caching, and Evaluation Harness) |
+| Standardized Analysis Proxies | **Complete** | `ave::AnalysisProxy` (low-resolution 270p video and 22.05kHz mono audio proxies, command builders, mock generation) |
+| Perception Cache & Raw Probabilities | **Complete** | `ave::PerceptionCache` (deterministic provenance keying, atomic `.tmp` file saving, raw curve persistence) |
+| Canonical Perception Report Schema | **Complete** | `ave::PerceptionReport` (strict `ave::Rational` timestamps, shot boundaries, rhythm, speech, visual, raw curves) |
+| Playback-Priority Job Scheduler | **Complete** | `ave::PerceptionScheduler` (priority worker queue, cancel tokens, progress tracking, "playback outranks analysis" throttle) |
+| Synthetic Eval Harness | **Complete** | `ave::SyntheticEvalHarness` (FFmpeg ground truth generation, Cut F1 @ $\pm 2$ frames, transition IoU, Beat F-measure @ $\pm 70$ ms) |
+| Phase 7A Unit & Integration Test | **Complete** | `ave_perception_infrastructure_test` (proxy, report roundtrip, cache atomic save, scheduler priority, eval metrics) |
+| Phase 7A Exit Gate | **MET** | Perception infrastructure verified with 18/18 automated tests passing 100% |
+| **Phase 7B: Shot & Transition Detection** | **NEXT** | TransNetV2 integration, classical color histogram/ECR fallback, range dissolve fusion |
 
 ---
 
 ## Test Verification Summary
-All 17 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
+All 18 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
 1. `VulkanProbeTest` — Physical GPU enumeration (Intel Arc Graphics 0x7d55, Vulkan 1.4.325)
 2. `SmokeTest` — Canonical rational time arithmetic & frame conversion
 3. `MediaAssetTest` — UUID generation, stream mapping, JSON serialization round-trip
@@ -118,20 +127,23 @@ All 17 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
 6. `CommandBusTest` — Command contract, typed commands (Insert, Delete, Move, Split, Transform, Mute), CompositeCommand rollback, undo/redo stacks, and dirty tracking
 7. `ProjectPersistenceTest` — Native `.aveproj` atomic save/load, OpenTimelineIO export/import roundtrip, and batch asset relinking
 8. `TimelineUiTest` — Viewport projection, zoom pivot, magnetic snapping, tool switching, inspector transforms, and UI undo/redo
-9. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
-10. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
-11. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
-12. `CompositingIntegrationTest` — End-to-end multi-track picture-in-picture compositing, spatial transform, opacity, track mute, seeking, and frame accuracy
-13. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
-14. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
-15. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
-16. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
-17. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
+9. `PerceptionInfrastructureTest` — Analysis proxy generation, PerceptionReport JSON roundtrip, atomic PerceptionCache, PerceptionScheduler priority/cancellation, and SyntheticEvalHarness metrics
+10. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
+11. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
+12. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
+13. `CompositingIntegrationTest` — End-to-end multi-track picture-in-picture compositing, spatial transform, opacity, track mute, seeking, and frame accuracy
+14. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
+15. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
+16. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
+17. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
+18. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
 
 ---
 
-## Next Steps in Phase 7
-1. Review `.agents/skills/ai-video-perception/SKILL.md` and `.agents/skills/ai-orchestration-ipc/SKILL.md`.
-2. Design the local perception engine: reference video ingest, scene segmentation, shot boundary detection.
+## Next Steps in Phase 7B
+1. Implement classical color histogram & edge change ratio (ECR) shot detector as the fast baseline.
+2. Build ONNX Runtime model wrapper abstraction with CPU fallback.
+3. Integrate TransNetV2 with 100-frame rolling window and fuse with frame-accurate refinement.
+4. Verify against SyntheticEvalHarness benchmark assertions.
 3. Extract structured features: visual pacing, motion vectors, audio beat envelopes, and OCR scene text.
 4. Establish local IPC protocol bridging AI perception proposals to the native Command Bus.

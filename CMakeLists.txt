@@ -51,6 +51,9 @@ endif()
 # Core engine library
 add_subdirectory(core)
 
+# AI Subsystem (Perception & Orchestration)
+add_subdirectory(ai)
+
 # Media foundation & FFmpeg codecs
 if(AVE_BUILD_MEDIA)
     find_package(FFmpeg QUIET)

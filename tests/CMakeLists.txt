@@ -47,6 +47,13 @@ add_test(NAME CommandBusTest COMMAND ave_command_bus_test)
 add_test(NAME ProjectPersistenceTest COMMAND ave_project_persistence_test "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sample_test.mp4")
 add_test(NAME TimelineUiTest COMMAND ave_timeline_ui_test)
 
+if(TARGET ave_ai)
+    add_executable(ave_perception_infrastructure_test perception_infrastructure_test.cpp)
+    target_link_libraries(ave_perception_infrastructure_test PRIVATE ave_ai ave_core)
+    target_compile_features(ave_perception_infrastructure_test PRIVATE cxx_std_20)
+    add_test(NAME PerceptionInfrastructureTest COMMAND ave_perception_infrastructure_test)
+endif()
+
 if(WIN32 AND EXISTS "${FFmpeg_INCLUDE_DIR}/../bin")
     file(GLOB FFMPEG_RUNTIME_DLLS "${FFmpeg_INCLUDE_DIR}/../bin/*.dll")
     foreach(DLL_PATH ${FFMPEG_RUNTIME_DLLS})
