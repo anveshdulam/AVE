@@ -9,6 +9,7 @@ add_library(ave_ai STATIC
     src/transnet_v2_detector.cpp
     src/shot_detector.cpp
     src/audio_perception.cpp
+    src/visual_perception.cpp
     include/ave/analysis_proxy.hpp
     include/ave/perception_cache.hpp
     include/ave/perception_report.hpp
@@ -19,6 +20,7 @@ add_library(ave_ai STATIC
     include/ave/transnet_v2_detector.hpp
     include/ave/shot_detector.hpp
     include/ave/audio_perception.hpp
+    include/ave/visual_perception.hpp
 )
 
 target_include_directories(ave_ai PUBLIC

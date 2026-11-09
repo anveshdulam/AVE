@@ -129,12 +129,21 @@
 | Unified Audio Perception Pipeline | **Complete** | `ave::AudioPerceptionPipeline` (rhythm, downbeats, speech intervals, raw flux curves in PerceptionReport) |
 | Phase 7C Unit & Integration Test | **Complete** | `ave_audio_perception_test` (loudness, transients, beat tracking, SyntheticEvalHarness beat F1, VAD, report roundtrip) |
 | Phase 7C Exit Gate | **MET** | Audio & speech perception verified with 20/20 automated tests passing 100% |
-| **Phase 7D: Visual Perception & Search** | **NEXT** | Motion vectors, Lab palette/contrast, SigLIP 2 keyframe embeddings, cosine vector search index |
+| **Phase 7D: Visual Perception & Search** | **COMPLETE** | Motion energy, Lab palette/contrast, SigLIP 2 keyframe embeddings, cosine vector search index |
+| Architecture Decision Record | **Complete** | ADR-0016 (Visual Perception, Keyframe Embeddings, and Vector Search Index) |
+| Color Science & Contrast Analyzer | **Complete** | `ave::ColorLookAnalyzer` (sRGB to D65 XYZ to CIE L*a*b*, mean L/a/b, standard deviation contrast) |
+| Inter-Frame Motion Analyzer | **Complete** | `ave::MotionAnalyzer` (luminance displacement, motion curves in PerceptionReport) |
+| Semantic Keyframe Embeddings | **Complete** | `ave::SigLIPEmbeddingExtractor` (1152-dimensional L2-normalized vectors for representative keyframes) |
+| In-Memory Cosine Vector Index | **Complete** | `ave::VectorSearchIndex` (top-K nearest keyframe search, cosine similarity ranking) |
+| Unified Visual Perception Pipeline | **Complete** | `ave::VisualPerceptionPipeline` (color, motion curve, keyframe indexing, and PerceptionReport integration) |
+| Phase 7D Unit & Integration Test | **Complete** | `ave_visual_perception_test` (color look, motion energy, 1152-d normalization, nearest-neighbor retrieval) |
+| Phase 7D Exit Gate | **MET** | Visual perception and search index verified with 21/21 automated tests passing 100% |
+| **Phase 7E: Reference Fingerprint v2** | **NEXT** | Multi-dimensional editing distribution (pacing, cut-to-beat, motion, color) & mathematical distance metric |
 
 ---
 
 ## Test Verification Summary
-All 20 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
+All 21 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
 1. `VulkanProbeTest` — Physical GPU enumeration (Intel Arc Graphics 0x7d55, Vulkan 1.4.325)
 2. `SmokeTest` — Canonical rational time arithmetic & frame conversion
 3. `MediaAssetTest` — UUID generation, stream mapping, JSON serialization round-trip
@@ -146,20 +155,20 @@ All 20 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
 9. `PerceptionInfrastructureTest` — Analysis proxy generation, PerceptionReport JSON roundtrip, atomic PerceptionCache, PerceptionScheduler priority/cancellation, and SyntheticEvalHarness metrics
 10. `ShotDetectorTest` — Color histogram & ECR deltas, TransNetV2 rolling window, frame-accurate cut refinement, dissolve ranges, keyframe selection, and SyntheticEvalHarness evaluation
 11. `AudioPerceptionTest` — Spectral flux transient detection, EBU R128 LUFS loudness, Beat This! rhythm/downbeats, sub-millisecond transient snapping, Silero VAD segmentation, and word token timestamps
-12. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
-13. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
-14. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
-15. `CompositingIntegrationTest` — End-to-end multi-track picture-in-picture compositing, spatial transform, opacity, track mute, seeking, and frame accuracy
-16. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
-17. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
-18. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
-19. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
-20. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
+12. `VisualPerceptionTest` — CIE L*a*b* color look, luminance contrast, inter-frame motion energy, SigLIP 2 1152-d embedding extraction, and cosine vector search index
+13. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
+14. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
+15. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
+16. `CompositingIntegrationTest` — End-to-end multi-track picture-in-picture compositing, spatial transform, opacity, track mute, seeking, and frame accuracy
+17. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
+18. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
+19. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
+20. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
+21. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
 
 ---
 
-## Next Steps in Phase 7D (Visual Perception & Search)
-1. Implement motion vector extraction and average motion energy calculation.
-2. Implement color look analysis: Lab mean ($L, a, b$), contrast, and exposure.
-3. Integrate SigLIP 2 vision encoder on representative keyframes (1152-dimensional embeddings).
-4. Build local cosine distance vector index for semantic shot similarity and reference matching.
+## Next Steps in Phase 7E (Reference Fingerprint v2)
+1. Design multi-dimensional editing distribution: shot length distribution (median, IQR, burstiness), cut-to-beat phase distribution, transition mix, motion energy trajectory, color look, and loudness profile.
+2. Implement mathematical distance metric $D(F_{\text{ref}}, F_{\text{target}})$ scoring how closely a candidate timeline matches a reference style.
+3. Author ADR-0017 and register `ave_fingerprint_test` (Test Suite #22).
