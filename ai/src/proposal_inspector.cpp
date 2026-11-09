@@ -83,3 +83,4 @@ std::string ProposalInspectionViewModel::to_formatted_summary() const {
 }
 
 } // namespace ave
+

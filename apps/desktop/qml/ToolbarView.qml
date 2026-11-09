@@ -4,121 +4,207 @@ import QtQuick.Layouts
 
 Rectangle {
     id: root
-    color: "#27272a"
-    border.color: "#3f3f46"
+    color: "#121215"
+    border.color: "#282832"
     border.width: 1
 
-    RowLayout {
+    property int activeWorkspace: 1 // 0: Media, 1: Edit, 2: Fusion, 3: Color, 4: Fairlight, 5: Deliver
+    property int activeTool: 0 // 0: Select, 1: Blade, 2: Ripple, 3: Slip
+    property bool snapping: true
+
+    ColumnLayout {
         anchors.fill: parent
-        anchors.leftMargin: 12
-        anchors.rightMargin: 12
-        spacing: 16
+        spacing: 0
 
-        // Brand / Title
-        Text {
-            text: qsTr("AVE v0.1.0")
-            color: "#f4f4f5"
-            font.bold: true
-            font.pixelSize: 14
-        }
-
-        Rectangle { width: 1; height: 24; color: "#3f3f46" }
-
-        // Transport Controls
-        RowLayout {
-            spacing: 6
-
-            Button {
-                text: "◀◀"
-                ToolTip.visible: hovered
-                ToolTip.text: "Step -1 Frame"
-            }
-            Button {
-                text: "▶ Play"
-                highlighted: true
-                ToolTip.visible: hovered
-                ToolTip.text: "Start Real-Time Playback"
-            }
-            Button {
-                text: "⏸ Pause"
-                ToolTip.visible: hovered
-                ToolTip.text: "Pause Transport"
-            }
-            Button {
-                text: "▶▶"
-                ToolTip.visible: hovered
-                ToolTip.text: "Step +1 Frame"
-            }
-        }
-
-        // SMPTE Timecode Display
+        // Top System / Menu Bar
         Rectangle {
-            width: 130
-            height: 32
-            color: "#09090b"
-            radius: 4
-            border.color: "#3f3f46"
+            Layout.fillWidth: true
+            height: 28
+            color: "#0e0e11"
+            border.color: "#202026"
+            border.width: 1
 
-            Text {
-                anchors.centerIn: parent
-                text: "00:00:00:00"
-                color: "#38bdf8"
-                font.family: "Consolas, monospace"
-                font.bold: true
-                font.pixelSize: 15
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 12
+                anchors.rightMargin: 12
+                spacing: 16
+
+                // App Title
+                RowLayout {
+                    spacing: 6
+                    Rectangle {
+                        width: 14
+                        height: 14
+                        radius: 3
+                        color: "#3b82f6"
+                        Text {
+                            anchors.centerIn: parent
+                            text: "A"
+                            color: "#ffffff"
+                            font.bold: true
+                            font.pixelSize: 10
+                        }
+                    }
+                    Text {
+                        text: "AVE STUDIO PRO v0.1.0"
+                        color: "#f3f4f6"
+                        font.bold: true
+                        font.pixelSize: 12
+                    }
+                }
+
+                // Studio Menus
+                RowLayout {
+                    spacing: 14
+                    Repeater {
+                        model: ["File", "Edit", "Timeline", "Clip", "Effects", "AI Assistant", "View", "Help"]
+                        Text {
+                            text: modelData
+                            color: "#9ca3af"
+                            font.pixelSize: 11
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                            }
+                        }
+                    }
+                }
+
+                Item { Layout.fillWidth: true }
+
+                // Hardware Status Badge
+                RowLayout {
+                    spacing: 8
+                    Rectangle {
+                        width: 7
+                        height: 7
+                        radius: 3.5
+                        color: "#10b981"
+                    }
+                    Text {
+                        text: "Intel(R) Arc(TM) Graphics | Vulkan 1.4 Compute | 24.00 FPS"
+                        color: "#10b981"
+                        font.bold: true
+                        font.pixelSize: 10
+                    }
+                }
             }
         }
 
-        Rectangle { width: 1; height: 24; color: "#3f3f46" }
+        // Lower Workspace Switcher & Timeline Toolbar
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            color: "#16161a"
 
-        // Edit Tools (Pointer, Blade, Trim)
-        RowLayout {
-            spacing: 4
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 12
+                anchors.rightMargin: 12
+                spacing: 16
 
-            Button {
-                text: "↖ Select"
-                checkable: true
-                checked: true
-            }
-            Button {
-                text: "✂ Blade"
-                checkable: true
-            }
-            Button {
-                text: "⇥ Trim"
-                checkable: true
-            }
-        }
+                // Workspace Switcher Tabs (DaVinci Resolve Style)
+                RowLayout {
+                    spacing: 2
+                    Repeater {
+                        model: ["MEDIA", "EDIT", "FUSION/FX", "COLOR", "AUDIO", "DELIVER"]
+                        Rectangle {
+                            width: 70
+                            height: 26
+                            radius: 3
+                            color: root.activeWorkspace === index ? "#2563eb" : "#1a1a20"
+                            border.color: root.activeWorkspace === index ? "#3b82f6" : "#2a2a35"
+                            border.width: 1
 
-        Rectangle { width: 1; height: 24; color: "#3f3f46" }
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData
+                                color: root.activeWorkspace === index ? "#ffffff" : "#9ca3af"
+                                font.bold: true
+                                font.pixelSize: 9
+                            }
 
-        // Snapping Toggle
-        CheckBox {
-            text: "Snap (10px)"
-            checked: true
-        }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.activeWorkspace = index
+                            }
+                        }
+                    }
+                }
 
-        Item { Layout.fillWidth: true }
+                Rectangle { width: 1; height: 20; color: "#2e2e38" }
 
-        // Undo / Redo buttons
-        Button {
-            text: "↶ Undo"
-        }
-        Button {
-            text: "↷ Redo"
-        }
+                // Editing Tools Palette
+                RowLayout {
+                    spacing: 4
 
-        Rectangle { width: 1; height: 24; color: "#3f3f46" }
+                    Button {
+                        text: "↖ Select (V)"
+                        checkable: true
+                        checked: root.activeTool === 0
+                        highlighted: checked
+                        Layout.preferredHeight: 26
+                        onClicked: root.activeTool = 0
+                    }
+                    Button {
+                        text: "✂ Blade (C)"
+                        checkable: true
+                        checked: root.activeTool === 1
+                        highlighted: checked
+                        Layout.preferredHeight: 26
+                        onClicked: root.activeTool = 1
+                    }
+                    Button {
+                        text: "⇥ Ripple (B)"
+                        checkable: true
+                        checked: root.activeTool === 2
+                        highlighted: checked
+                        Layout.preferredHeight: 26
+                        onClicked: root.activeTool = 2
+                    }
+                    Button {
+                        text: "↔ Slip (Y)"
+                        checkable: true
+                        checked: root.activeTool === 3
+                        highlighted: checked
+                        Layout.preferredHeight: 26
+                        onClicked: root.activeTool = 3
+                    }
+                }
 
-        // Zoom Slider
-        RowLayout {
-            spacing: 6
-            Text { text: "Zoom"; color: "#a1a1aa"; font.pixelSize: 12 }
-            Slider {
-                from: 0.1
-                to: 5.0
-                value: 1.0
-                Layout.preferredWidth: 100
+                Rectangle { width: 1; height: 20; color: "#2e2e38" }
+
+                // Snapping Toggle
+                Button {
+                    text: root.snapping ? "🧲 Snap: ON" : "Snap: OFF"
+                    checkable: true
+                    checked: root.snapping
+                    Layout.preferredHeight: 26
+                    onClicked: root.snapping = !root.snapping
+                }
+
+                Item { Layout.fillWidth: true }
+
+                // Glowing SMPTE Master Timecode
+                Rectangle {
+                    width: 125
+                    height: 26
+                    color: "#09090b"
+                    radius: 3
+                    border.color: "#3b82f6"
+                    border.width: 1
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "01:00:14:18"
+                        color: "#38bdf8"
+                        font.family: "Consolas, monospace"
+                        font.bold: true
+                        font.pixelSize: 13
+                    }
+                }
             }
         }
     }

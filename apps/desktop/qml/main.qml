@@ -7,96 +7,90 @@ ApplicationWindow {
     visible: true
     width: 1440
     height: 900
-    minimumWidth: 1024
-    minimumHeight: 600
-    title: qsTr("Autonomous Video Editor (AVE) — Native C++20 Shell")
-    color: "#18181b" // Dark theme zinc-900
+    minimumWidth: 1100
+    minimumHeight: 650
+    title: qsTr("Autonomous Video Editor (AVE) — Professional Studio")
+    color: "#0f0f13"
 
-    // Top Header & Transport Toolbar
+    // Top Studio Navigation & Tool Toolbar
     header: ToolbarView {
         id: toolbar
-        height: 48
+        height: 60
     }
 
-    // Main Work Area Splitter
+    // Master Workspace Vertical Splitter
     SplitView {
         anchors.fill: parent
         orientation: Qt.Vertical
 
-        // Upper Zone: Viewer (Left) & Inspector (Right)
+        // UPPER ZONE: Media Pool (Left), Program Viewer (Center), Inspector/AI Studio (Right), Audio Meter (Far Right)
         SplitView {
             SplitView.fillWidth: true
-            SplitView.preferredHeight: 460
+            SplitView.preferredHeight: 480
+            SplitView.minimumHeight: 280
             orientation: Qt.Horizontal
 
-            // Viewer Shell
-            Rectangle {
-                SplitView.fillWidth: true
-                color: "#09090b"
-                border.color: "#27272a"
-                border.width: 1
-
-                ColumnLayout {
-                    anchors.centerIn: parent
-                    spacing: 12
-
-                    Rectangle {
-                        width: 640
-                        height: 360
-                        color: "#000000"
-                        border.color: "#3f3f46"
-                        border.width: 2
-                        radius: 4
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: qsTr("Vulkan Offscreen Render Graph Viewport\n(1920x1080 @ 24fps)")
-                            color: "#71717a"
-                            horizontalAlignment: Text.AlignHCenter
-                            font.pixelSize: 14
-                        }
-                    }
-
-                    Text {
-                        Layout.alignment: Qt.AlignHCenter
-                        text: qsTr("Hardware Accelerator: Intel(R) Arc(TM) Graphics (Vulkan 1.4)")
-                        color: "#10b981"
-                        font.pixelSize: 12
-                        font.bold: true
-                    }
-                }
+            // 1. Studio Media Pool & Asset Bins
+            MediaPoolView {
+                id: mediaPool
+                SplitView.preferredWidth: 290
+                SplitView.minimumWidth: 220
+                SplitView.maximumWidth: 400
             }
 
-            // Right: Inspector & AI Assistant Panel
+            // 2. Broadcast Program Monitor / Viewport
+            ViewerView {
+                id: programViewer
+                SplitView.fillWidth: true
+                SplitView.minimumWidth: 420
+            }
+
+            // 3. Clip Properties Inspector & AI Prompt Studio
             InspectorView {
-                SplitView.preferredWidth: 380
-                SplitView.minimumWidth: 300
+                id: inspector
+                SplitView.preferredWidth: 350
+                SplitView.minimumWidth: 280
+                SplitView.maximumWidth: 450
+            }
+
+            // 4. Stereo Master Hardware Audio Meter
+            AudioMeterView {
+                id: audioMeter
+                SplitView.preferredWidth: 48
+                SplitView.minimumWidth: 44
+                SplitView.maximumWidth: 56
             }
         }
 
-        // Lower Zone: Multi-Track Timeline & Track Headers
+        // LOWER ZONE: Multi-Track Timeline & Track Control Strips
         Rectangle {
             SplitView.fillWidth: true
-            SplitView.preferredHeight: 380
-            SplitView.minimumHeight: 200
-            color: "#18181b"
-            border.color: "#27272a"
+            SplitView.preferredHeight: 340
+            SplitView.minimumHeight: 180
+            color: "#0f0f13"
+            border.color: "#282832"
             border.width: 1
 
-            RowLayout {
+            SplitView {
                 anchors.fill: parent
-                spacing: 0
+                orientation: Qt.Horizontal
 
-                // Track Headers (Mute, Solo, Lock)
+                // Track Headers (Lock, Mute, Solo, Vol)
                 TrackHeaderView {
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 220
+                    SplitView.preferredWidth: 220
+                    SplitView.minimumWidth: 180
+                    SplitView.maximumWidth: 280
                 }
 
-                // Timeline Canvas (Ruler, Tracks, Clips, Playhead)
+                // Timeline Canvas (SMPTE Ruler, Scrubber, Video/Audio Tracks with Waveforms)
                 TimelineCanvas {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    SplitView.fillWidth: true
+                    SplitView.minimumWidth: 400
+                    onPlayheadMoved: (posX) => {
+                        // Keep timecode and viewer playhead ratio in sync
+                        var ratio = posX / 1500.0
+                        programViewer.playheadRatio = Math.min(1.0, Math.max(0.0, ratio))
+                    }
                 }
             }
         }

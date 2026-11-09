@@ -31,3 +31,4 @@ We implemented a three-tier local language and proposal review architecture:
 - Natural language prompts produce deterministic, mathematically optimal edit plans.
 - Full human-in-the-loop review and approval before timeline mutation.
 - Verified by automated test suite `ave_language_layer_test` passing 100% across all 24 project test suites.
+
