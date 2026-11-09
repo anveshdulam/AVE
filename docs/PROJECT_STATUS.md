@@ -113,12 +113,20 @@
 | Synthetic Eval Harness | **Complete** | `ave::SyntheticEvalHarness` (FFmpeg ground truth generation, Cut F1 @ $\pm 2$ frames, transition IoU, Beat F-measure @ $\pm 70$ ms) |
 | Phase 7A Unit & Integration Test | **Complete** | `ave_perception_infrastructure_test` (proxy, report roundtrip, cache atomic save, scheduler priority, eval metrics) |
 | Phase 7A Exit Gate | **MET** | Perception infrastructure verified with 18/18 automated tests passing 100% |
-| **Phase 7B: Shot & Transition Detection** | **NEXT** | TransNetV2 integration, classical color histogram/ECR fallback, range dissolve fusion |
+| **Phase 7B: Shot & Transition Detection** | **COMPLETE** | TransNetV2 integration, classical color histogram/ECR fallback, range dissolve fusion |
+| Architecture Decision Record | **Complete** | ADR-0014 (Shot Boundary Detection with TransNetV2 and Classical Refinement) |
+| Classical Shot & Transition Baseline | **Complete** | `ave::ClassicalShotDetector` (4096-bin Chi-square histogram, Sobel Edge Change Ratio, cut & dissolve interval detection) |
+| Model Execution Abstraction | **Complete** | `ave::ModelRuntime` / `ave::IModelRunner` (static shapes, replaceable execution providers, mock and CPU runners) |
+| TransNetV2 Deep Learning Detector | **Complete** | `ave::TransNetV2Detector` (rolling 100-frame window, 50-frame overlap stride, max-probability blending, keyframe selection) |
+| Unified Fusion & Refinement | **Complete** | `ave::ShotDetector` (hybrid TransNetV2 with +/-2 frame classical contrast snapping, auto fallback, raw probability curve) |
+| Phase 7B Unit & Integration Test | **Complete** | `ave_shot_detector_test` (histogram/ECR, model manifest, rolling window, fusion refinement, SyntheticEvalHarness) |
+| Phase 7B Exit Gate | **MET** | Shot and transition detector verified with 19/19 automated tests passing 100% |
+| **Phase 7C: Audio & Speech Perception** | **NEXT** | Beat This! tempo curve/downbeats, spectral flux onsets, Silero VAD + whisper.cpp |
 
 ---
 
 ## Test Verification Summary
-All 18 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
+All 19 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
 1. `VulkanProbeTest` — Physical GPU enumeration (Intel Arc Graphics 0x7d55, Vulkan 1.4.325)
 2. `SmokeTest` — Canonical rational time arithmetic & frame conversion
 3. `MediaAssetTest` — UUID generation, stream mapping, JSON serialization round-trip
@@ -128,22 +136,23 @@ All 18 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
 7. `ProjectPersistenceTest` — Native `.aveproj` atomic save/load, OpenTimelineIO export/import roundtrip, and batch asset relinking
 8. `TimelineUiTest` — Viewport projection, zoom pivot, magnetic snapping, tool switching, inspector transforms, and UI undo/redo
 9. `PerceptionInfrastructureTest` — Analysis proxy generation, PerceptionReport JSON roundtrip, atomic PerceptionCache, PerceptionScheduler priority/cancellation, and SyntheticEvalHarness metrics
-10. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
-11. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
-12. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
-13. `CompositingIntegrationTest` — End-to-end multi-track picture-in-picture compositing, spatial transform, opacity, track mute, seeking, and frame accuracy
-14. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
-15. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
-16. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
-17. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
-18. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
+10. `ShotDetectorTest` — Color histogram & ECR deltas, TransNetV2 rolling window, frame-accurate cut refinement, dissolve ranges, keyframe selection, and SyntheticEvalHarness evaluation
+11. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
+12. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
+13. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
+14. `CompositingIntegrationTest` — End-to-end multi-track picture-in-picture compositing, spatial transform, opacity, track mute, seeking, and frame accuracy
+15. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
+16. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
+17. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
+18. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
+19. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
 
 ---
 
-## Next Steps in Phase 7B
-1. Implement classical color histogram & edge change ratio (ECR) shot detector as the fast baseline.
-2. Build ONNX Runtime model wrapper abstraction with CPU fallback.
-3. Integrate TransNetV2 with 100-frame rolling window and fuse with frame-accurate refinement.
-4. Verify against SyntheticEvalHarness benchmark assertions.
+## Next Steps in Phase 7C
+1. Implement spectral flux transient onset detector and EBU R128 integrated loudness (LUFS) meter.
+2. Build Beat This! audio rhythm processor (22.05kHz mono audio, 50 fps / 20ms resolution, downbeats, beats, and tempo curves).
+3. Integrate Silero VAD for speech interval segmentation and whisper.cpp for word-level timestamps.
+4. Verify audio/speech timeline alignment with exact `ave::Rational` timestamps.
 3. Extract structured features: visual pacing, motion vectors, audio beat envelopes, and OCR scene text.
 4. Establish local IPC protocol bridging AI perception proposals to the native Command Bus.

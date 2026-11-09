@@ -52,6 +52,11 @@ if(TARGET ave_ai)
     target_link_libraries(ave_perception_infrastructure_test PRIVATE ave_ai ave_core)
     target_compile_features(ave_perception_infrastructure_test PRIVATE cxx_std_20)
     add_test(NAME PerceptionInfrastructureTest COMMAND ave_perception_infrastructure_test)
+
+    add_executable(ave_shot_detector_test shot_detector_test.cpp)
+    target_link_libraries(ave_shot_detector_test PRIVATE ave_ai ave_core)
+    target_compile_features(ave_shot_detector_test PRIVATE cxx_std_20)
+    add_test(NAME ShotDetectorTest COMMAND ave_shot_detector_test)
 endif()
 
 if(WIN32 AND EXISTS "${FFmpeg_INCLUDE_DIR}/../bin")
