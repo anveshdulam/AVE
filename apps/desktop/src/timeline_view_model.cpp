@@ -5,7 +5,12 @@
 namespace ave {
 
 TimelineViewModel::TimelineViewModel(Timeline& timeline)
-    : timeline_(timeline) {}
+    : timeline_(timeline),
+      project_(nullptr) {}
+
+TimelineViewModel::TimelineViewModel(Project& project)
+    : timeline_(project.timeline_mut()),
+      project_(&project) {}
 
 size_t TimelineViewModel::track_count() const {
     return timeline_.video_tracks().size() + timeline_.audio_tracks().size();
@@ -91,62 +96,182 @@ void TimelineViewModel::clear_selection() {
     }
 }
 
-void TimelineViewModel::set_zoom_factor(double zoom) {
-    double clamped = std::clamp(zoom, 0.1, 10.0);
-    if (std::abs(zoom_factor_ - clamped) > 0.001) {
-        zoom_factor_ = clamped;
+void TimelineViewModel::set_tool(TimelineTool tool) {
+    if (tool_ != tool) {
+        tool_ = tool;
         notify_changed();
     }
 }
 
-bool TimelineViewModel::split_at_playhead() {
-    bool split_done = false;
+double TimelineViewModel::zoom_factor() const noexcept {
+    return viewport_.pixels_per_second() / 100.0;
+}
 
-    if (!selected_clip_id_.empty()) {
-        for (const auto& track : timeline_.video_tracks()) {
-            if (track.find_item(selected_clip_id_)) {
-                auto res = timeline_.split_item(track.id(), selected_clip_id_, playhead_time_);
-                if (!res.first.empty()) {
-                    selected_clip_id_ = res.first;
-                    split_done = true;
+void TimelineViewModel::set_zoom_factor(double zoom) {
+    double clamped = std::clamp(zoom, 0.1, 20.0);
+    viewport_.set_pixels_per_second(clamped * 100.0);
+    notify_changed();
+}
+
+void TimelineViewModel::set_snapping_enabled(bool enabled) noexcept {
+    snapping_.set_enabled(enabled);
+}
+
+SnapResult TimelineViewModel::snap(Rational candidate_time, const std::string& ignore_clip_id) const {
+    return snapping_.find_snap(candidate_time, timeline_, viewport_, playhead_time_, ignore_clip_id);
+}
+
+bool TimelineViewModel::split_at_playhead() {
+    std::string target_clip_id = selected_clip_id_;
+    std::string target_track_id = "";
+
+    if (!target_clip_id.empty()) {
+        const Track* trk = timeline_.find_track_for_item(target_clip_id);
+        if (trk) target_track_id = trk->id();
+    } else {
+        // Find first item under playhead
+        for (const auto& trk : timeline_.video_tracks()) {
+            const auto* it = trk.item_at(playhead_time_);
+            if (it) {
+                target_clip_id = it->id();
+                target_track_id = trk.id();
+                break;
+            }
+        }
+        if (target_clip_id.empty()) {
+            for (const auto& trk : timeline_.audio_tracks()) {
+                const auto* it = trk.item_at(playhead_time_);
+                if (it) {
+                    target_clip_id = it->id();
+                    target_track_id = trk.id();
                     break;
                 }
             }
         }
-        if (!split_done) {
-            for (const auto& track : timeline_.audio_tracks()) {
-                if (track.find_item(selected_clip_id_)) {
-                    auto res = timeline_.split_item(track.id(), selected_clip_id_, playhead_time_);
-                    if (!res.first.empty()) {
-                        selected_clip_id_ = res.first;
-                        split_done = true;
-                        break;
-                    }
-                }
-            }
+    }
+
+    if (target_clip_id.empty() || target_track_id.empty()) {
+        return false;
+    }
+
+    if (project_) {
+        auto cmd = std::make_unique<SplitClipCommand>(target_track_id, target_clip_id, playhead_time_);
+        auto res = project_->execute_command(std::move(cmd));
+        if (res.is_success()) {
+            selected_clip_id_.clear();
+            notify_changed();
+            return true;
         }
+        return false;
     } else {
-        // Split any item under playhead
-        for (const auto& track : timeline_.video_tracks()) {
-            const TimelineItem* item = track.item_at(playhead_time_);
-            if (item) {
-                auto res = timeline_.split_item(track.id(), item->id(), playhead_time_);
-                if (!res.first.empty()) split_done = true;
-            }
+        try {
+            auto [left, right] = timeline_.split_item(target_track_id, target_clip_id, playhead_time_);
+            selected_clip_id_ = left;
+            notify_changed();
+            return true;
+        } catch (...) {
+            return false;
         }
-        for (const auto& track : timeline_.audio_tracks()) {
-            const TimelineItem* item = track.item_at(playhead_time_);
-            if (item) {
-                auto res = timeline_.split_item(track.id(), item->id(), playhead_time_);
-                if (!res.first.empty()) split_done = true;
-            }
+    }
+}
+
+bool TimelineViewModel::delete_selected() {
+    if (selected_clip_id_.empty()) return false;
+    const Track* trk = timeline_.find_track_for_item(selected_clip_id_);
+    if (!trk) return false;
+
+    std::string trk_id = trk->id();
+    std::string clip_id = selected_clip_id_;
+
+    if (project_) {
+        auto cmd = std::make_unique<DeleteClipCommand>(trk_id, clip_id);
+        auto res = project_->execute_command(std::move(cmd));
+        if (res.is_success()) {
+            clear_selection();
+            return true;
+        }
+        return false;
+    } else {
+        Track* trk_mut = timeline_.find_track_mut(trk_id);
+        if (trk_mut && trk_mut->remove_item(clip_id)) {
+            clear_selection();
+            return true;
+        }
+        return false;
+    }
+}
+
+bool TimelineViewModel::move_selected(const std::string& dst_track_id, Rational new_in) {
+    if (selected_clip_id_.empty()) return false;
+    const Track* src_trk = timeline_.find_track_for_item(selected_clip_id_);
+    if (!src_trk) return false;
+
+    // Apply magnetic snapping if enabled
+    if (snapping_.enabled()) {
+        auto snap_res = snap(new_in, selected_clip_id_);
+        if (snap_res.snapped) {
+            new_in = snap_res.snapped_time;
         }
     }
 
-    if (split_done) {
-        notify_changed();
+    if (project_) {
+        auto cmd = std::make_unique<MoveClipCommand>(src_trk->id(), selected_clip_id_, dst_track_id, new_in);
+        auto res = project_->execute_command(std::move(cmd));
+        if (res.is_success()) {
+            notify_changed();
+            return true;
+        }
+        return false;
     }
-    return split_done;
+    return false;
+}
+
+bool TimelineViewModel::toggle_track_mute(const std::string& track_id) {
+    const Track* trk = timeline_.find_track(track_id);
+    if (!trk) return false;
+
+    bool new_mute = !trk->muted();
+    if (project_) {
+        auto cmd = std::make_unique<SetTrackMuteCommand>(track_id, new_mute);
+        auto res = project_->execute_command(std::move(cmd));
+        if (res.is_success()) {
+            notify_changed();
+            return true;
+        }
+        return false;
+    } else {
+        Track* trk_mut = timeline_.find_track_mut(track_id);
+        if (trk_mut) {
+            trk_mut->set_muted(new_mute);
+            notify_changed();
+            return true;
+        }
+        return false;
+    }
+}
+
+bool TimelineViewModel::undo() {
+    if (project_ && project_->undo().is_success()) {
+        notify_changed();
+        return true;
+    }
+    return false;
+}
+
+bool TimelineViewModel::redo() {
+    if (project_ && project_->redo().is_success()) {
+        notify_changed();
+        return true;
+    }
+    return false;
+}
+
+bool TimelineViewModel::can_undo() const {
+    return project_ ? project_->command_history().can_undo() : false;
+}
+
+bool TimelineViewModel::can_redo() const {
+    return project_ ? project_->command_history().can_redo() : false;
 }
 
 void TimelineViewModel::notify_changed() {
@@ -156,4 +281,3 @@ void TimelineViewModel::notify_changed() {
 }
 
 } // namespace ave
-

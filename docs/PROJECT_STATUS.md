@@ -1,9 +1,9 @@
 # Autonomous Video Editor — Project Status
 
 ## Project Baseline
-- **Milestone:** Phase 5 — Project Serialization, OpenTimelineIO & Asset Relinking (COMPLETE)
-- **Date:** 2026-11-08
-- **Architecture Status:** 5-layer system and ADRs 0001–0011 established.
+- **Milestone:** Phase 6 — Professional Timeline UI & Native Presentation Shell (COMPLETE)
+- **Date:** 2026-11-09
+- **Architecture Status:** 5-layer system and ADRs 0001–0012 established.
 - **Hardware Profile (Audited):**
   - CPU: Intel(R) Core(TM) Ultra 5 125H (14 cores: 4P + 8E + 2LPE, 18 logical threads)
   - RAM: 16 GB LPDDR5X (7467 MT/s)
@@ -95,12 +95,21 @@
 | Desktop Application System Status | **Complete** | `apps/desktop/ave_desktop.exe` displays full 5-layer system status, GPU profile, timeline, and OTIO export |
 | Phase 5 Unit & Integration Test | **Complete** | `ave_project_persistence_test` (round-trip project save/load, OTIO export/import, batch asset relinking) |
 | Phase 5 Exit Gate | **MET** | Project persistence and interchange verified with 16/16 automated tests passing 100% |
-| **Phase 6: Professional Timeline UI & Native Presentation Shell** | **NEXT** | QML multi-track canvas, playhead scrubbing, zoom/pan virtual viewport, clip selection & drag-and-drop |
+| **Phase 6: Professional Timeline UI & Native Presentation Shell** | **COMPLETE** | QML multi-track canvas, playhead scrubbing, zoom/pan virtual viewport, clip selection & drag-and-drop |
+| Architecture Decision Record | **Complete** | ADR-0012 (Timeline UI Interaction Architecture, Viewport Projection, and Presentation Shell) |
+| Virtual Viewport & Projection | **Complete** | `ave::TimelineViewport` (time-to-pixel and pixel-to-time projection, pivot zooming, virtual scrolling, track layout) |
+| Magnetic Snapping Engine | **Complete** | `ave::TimelineSnapping` (magnetic alignment to origin, playhead, and clip boundaries with configurable pixel threshold) |
+| Presentation Inspector ViewModel | **Complete** | `ave::InspectorViewModel` (property observation and non-destructive `SetTransformCommand` dispatch) |
+| Command-Integrated Timeline ViewModel | **Complete** | `ave::TimelineViewModel` (tool modes: Select/Razor/Trim/Slip, Command Bus actions: split, delete, move, mute, undo/redo) |
+| Professional QML Desktop Layout | **Complete** | Dark-themed QML workspace (`main.qml`, `ToolbarView.qml`, `TrackHeaderView.qml`, `TimelineCanvas.qml`, `InspectorView.qml`) |
+| Phase 6 Unit & Integration Test | **Complete** | `ave_timeline_ui_test` (viewport projection, snapping verification, tool transitions, inspector transforms, undo/redo) |
+| Phase 6 Exit Gate | **MET** | Presentation layer and interaction engine verified with 17/17 automated tests passing 100% |
+| **Phase 7: Local AI Video Perception & Reference Pipeline** | **NEXT** | Local reference video analysis, shot boundary detection, scene understanding, motion/beat extraction |
 
 ---
 
 ## Test Verification Summary
-All 16 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
+All 17 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
 1. `VulkanProbeTest` — Physical GPU enumeration (Intel Arc Graphics 0x7d55, Vulkan 1.4.325)
 2. `SmokeTest` — Canonical rational time arithmetic & frame conversion
 3. `MediaAssetTest` — UUID generation, stream mapping, JSON serialization round-trip
@@ -108,19 +117,21 @@ All 16 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
 5. `TimelineTest` — Multi-track timeline, item placement, overlap prevention, active item query, blade cut, transform/opacity serialization, and JSON roundtrip
 6. `CommandBusTest` — Command contract, typed commands (Insert, Delete, Move, Split, Transform, Mute), CompositeCommand rollback, undo/redo stacks, and dirty tracking
 7. `ProjectPersistenceTest` — Native `.aveproj` atomic save/load, OpenTimelineIO export/import roundtrip, and batch asset relinking
-8. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
-9. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
-10. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
-11. `CompositingIntegrationTest` — End-to-end multi-track picture-in-picture compositing, spatial transform, opacity, track mute, seeking, and frame accuracy
-12. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
-13. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
-14. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
-15. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
-16. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
+8. `TimelineUiTest` — Viewport projection, zoom pivot, magnetic snapping, tool switching, inspector transforms, and UI undo/redo
+9. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
+10. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
+11. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
+12. `CompositingIntegrationTest` — End-to-end multi-track picture-in-picture compositing, spatial transform, opacity, track mute, seeking, and frame accuracy
+13. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
+14. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
+15. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
+16. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
+17. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
 
 ---
 
-## Next Steps in Phase 6
-1. Review `.agents/skills/timeline-ui-interaction/SKILL.md` and `.agents/skills/qt6-qml-presentation/SKILL.md`.
-2. Connect `TimelineViewModel` and `PlaybackViewModel` to Qt 6 Quick / QML multi-track canvas.
-3. Implement professional timeline interactions: track header controls (mute, solo, lock), clip selection, slip/slide/trim handles, snapping, and zoom/pan viewport navigation.
+## Next Steps in Phase 7
+1. Review `.agents/skills/ai-video-perception/SKILL.md` and `.agents/skills/ai-orchestration-ipc/SKILL.md`.
+2. Design the local perception engine: reference video ingest, scene segmentation, shot boundary detection.
+3. Extract structured features: visual pacing, motion vectors, audio beat envelopes, and OCR scene text.
+4. Establish local IPC protocol bridging AI perception proposals to the native Command Bus.

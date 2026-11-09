@@ -27,6 +27,17 @@ add_executable(ave_project_persistence_test project_persistence_test.cpp)
 target_link_libraries(ave_project_persistence_test PRIVATE ave_core)
 target_compile_features(ave_project_persistence_test PRIVATE cxx_std_20)
 
+add_executable(ave_timeline_ui_test
+    timeline_ui_test.cpp
+    ${CMAKE_SOURCE_DIR}/apps/desktop/src/timeline_viewport.cpp
+    ${CMAKE_SOURCE_DIR}/apps/desktop/src/timeline_snapping.cpp
+    ${CMAKE_SOURCE_DIR}/apps/desktop/src/timeline_view_model.cpp
+    ${CMAKE_SOURCE_DIR}/apps/desktop/src/inspector_view_model.cpp
+)
+target_include_directories(ave_timeline_ui_test PRIVATE ${CMAKE_SOURCE_DIR}/apps/desktop/include)
+target_link_libraries(ave_timeline_ui_test PRIVATE ave_core)
+target_compile_features(ave_timeline_ui_test PRIVATE cxx_std_20)
+
 include(CTest)
 add_test(NAME SmokeTest COMMAND ave_smoke_test)
 add_test(NAME MediaAssetTest COMMAND ave_media_asset_test)
@@ -34,6 +45,7 @@ add_test(NAME MediaPoolTest COMMAND ave_media_pool_test)
 add_test(NAME TimelineTest COMMAND ave_timeline_test)
 add_test(NAME CommandBusTest COMMAND ave_command_bus_test)
 add_test(NAME ProjectPersistenceTest COMMAND ave_project_persistence_test "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sample_test.mp4")
+add_test(NAME TimelineUiTest COMMAND ave_timeline_ui_test)
 
 if(WIN32 AND EXISTS "${FFmpeg_INCLUDE_DIR}/../bin")
     file(GLOB FFMPEG_RUNTIME_DLLS "${FFmpeg_INCLUDE_DIR}/../bin/*.dll")

@@ -2,11 +2,22 @@
 
 #include "ave/timeline.hpp"
 #include "ave/timecode.hpp"
+#include "ave/project.hpp"
+#include "ave/timeline_viewport.hpp"
+#include "ave/timeline_snapping.hpp"
+
 #include <string>
 #include <vector>
 #include <functional>
 
 namespace ave {
+
+enum class TimelineTool {
+    Select,
+    Razor,
+    Trim,
+    Slip
+};
 
 struct TrackDisplayInfo {
     std::string id;
@@ -30,11 +41,13 @@ struct ClipDisplayInfo {
 
 /**
  * @brief ViewModel for the multi-track timeline UI view.
- * Decouples presentation and user interactions from core timeline storage.
+ * Decouples presentation and user interactions from core timeline storage,
+ * and routes all user edits through validated Command Bus transactions.
  */
 class TimelineViewModel {
 public:
     explicit TimelineViewModel(Timeline& timeline);
+    explicit TimelineViewModel(Project& project);
 
     [[nodiscard]] size_t track_count() const;
     [[nodiscard]] std::vector<TrackDisplayInfo> tracks() const;
@@ -49,29 +62,51 @@ public:
     void select_clip(const std::string& clip_id);
     void clear_selection();
 
-    [[nodiscard]] double zoom_factor() const noexcept { return zoom_factor_; }
+    // Tool Modes
+    [[nodiscard]] TimelineTool tool() const noexcept { return tool_; }
+    void set_tool(TimelineTool tool);
+
+    // Viewport & Snapping
+    [[nodiscard]] const TimelineViewport& viewport() const noexcept { return viewport_; }
+    TimelineViewport& viewport_mut() noexcept { return viewport_; }
+
+    [[nodiscard]] const TimelineSnapping& snapping() const noexcept { return snapping_; }
+    TimelineSnapping& snapping_mut() noexcept { return snapping_; }
+
+    [[nodiscard]] double zoom_factor() const noexcept;
     void set_zoom_factor(double zoom);
 
-    [[nodiscard]] bool snapping_enabled() const noexcept { return snapping_enabled_; }
-    void set_snapping_enabled(bool enabled) noexcept { snapping_enabled_ = enabled; }
+    [[nodiscard]] bool snapping_enabled() const noexcept { return snapping_.enabled(); }
+    void set_snapping_enabled(bool enabled) noexcept;
 
-    /**
-     * @brief Splits the clip at the current playhead position across selected or active tracks.
-     */
+    [[nodiscard]] SnapResult snap(Rational candidate_time, const std::string& ignore_clip_id = "") const;
+
+    // Command Bus Operations
     bool split_at_playhead();
+    bool delete_selected();
+    bool move_selected(const std::string& dst_track_id, Rational new_in);
+    bool toggle_track_mute(const std::string& track_id);
+
+    bool undo();
+    bool redo();
+    [[nodiscard]] bool can_undo() const;
+    [[nodiscard]] bool can_redo() const;
 
     void set_on_changed(std::function<void()> callback) { on_changed_ = std::move(callback); }
 
 private:
     Timeline& timeline_;
+    Project* project_{nullptr};
+
     Rational playhead_time_{0, 1};
     std::string selected_clip_id_{};
-    double zoom_factor_{1.0};
-    bool snapping_enabled_{true};
+    TimelineTool tool_{TimelineTool::Select};
+    TimelineViewport viewport_{};
+    TimelineSnapping snapping_{};
+
     std::function<void()> on_changed_{};
 
     void notify_changed();
 };
 
 } // namespace ave
-

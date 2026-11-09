@@ -128,3 +128,4 @@ RelinkReport AssetRelinker::auto_relink_directory(MediaPool& pool,
 }
 
 } // namespace ave
+

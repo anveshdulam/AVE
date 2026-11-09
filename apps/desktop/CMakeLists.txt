@@ -2,8 +2,14 @@ add_executable(ave_desktop
     main.cpp
     src/timeline_view_model.cpp
     src/playback_view_model.cpp
+    src/timeline_viewport.cpp
+    src/timeline_snapping.cpp
+    src/inspector_view_model.cpp
     include/ave/timeline_view_model.hpp
     include/ave/playback_view_model.hpp
+    include/ave/timeline_viewport.hpp
+    include/ave/timeline_snapping.hpp
+    include/ave/inspector_view_model.hpp
 )
 
 target_include_directories(ave_desktop PUBLIC
