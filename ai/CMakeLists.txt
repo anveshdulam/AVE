@@ -11,6 +11,8 @@ add_library(ave_ai STATIC
     src/audio_perception.cpp
     src/visual_perception.cpp
     src/reference_fingerprint.cpp
+    src/deterministic_planner.cpp
+    src/proposal_bridge.cpp
     include/ave/analysis_proxy.hpp
     include/ave/perception_cache.hpp
     include/ave/perception_report.hpp
@@ -23,6 +25,9 @@ add_library(ave_ai STATIC
     include/ave/audio_perception.hpp
     include/ave/visual_perception.hpp
     include/ave/reference_fingerprint.hpp
+    include/ave/edit_proposal.hpp
+    include/ave/deterministic_planner.hpp
+    include/ave/proposal_bridge.hpp
 )
 
 target_include_directories(ave_ai PUBLIC
