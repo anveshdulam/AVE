@@ -13,6 +13,9 @@ add_library(ave_ai STATIC
     src/reference_fingerprint.cpp
     src/deterministic_planner.cpp
     src/proposal_bridge.cpp
+    src/language_sidecar.cpp
+    src/prompt_parser.cpp
+    src/proposal_inspector.cpp
     include/ave/analysis_proxy.hpp
     include/ave/perception_cache.hpp
     include/ave/perception_report.hpp
@@ -28,6 +31,9 @@ add_library(ave_ai STATIC
     include/ave/edit_proposal.hpp
     include/ave/deterministic_planner.hpp
     include/ave/proposal_bridge.hpp
+    include/ave/language_sidecar.hpp
+    include/ave/prompt_parser.hpp
+    include/ave/proposal_inspector.hpp
 )
 
 target_include_directories(ave_ai PUBLIC

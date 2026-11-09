@@ -67,10 +67,10 @@ ApplicationWindow {
                 }
             }
 
-            // Right: Inspector Panel
+            // Right: Inspector & AI Assistant Panel
             InspectorView {
-                SplitView.preferredWidth: 340
-                SplitView.minimumWidth: 260
+                SplitView.preferredWidth: 380
+                SplitView.minimumWidth: 300
             }
         }
 

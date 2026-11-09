@@ -158,11 +158,18 @@
 | Phase 7F Unit & Integration Test | **Complete** | `ave_planner_test` (beat grid planning, dry-run simulation, atomic composite commit, 1-step undo/redo, diff summary) |
 | Phase 7F Exit Gate | **MET** | Deterministic planner and proposal bridge verified with 23/23 automated tests passing 100% |
 | **Phase 7: Reference Perception & AI Editing** | **COMPLETE** | 7A (Infra/Eval), 7B (Shots/TransNetV2), 7C (Audio/Beat This!), 7D (Visual/SigLIP 2), 7E (Fingerprint v2), 7F (Planner/Bridge) |
+| **Phase 8: Local Language Layer & Interactive AI Editing UI** | **COMPLETE** | Out-of-process VLM/LLM sidecar, user prompt constraint parser, and interactive proposal inspector |
+| Architecture Decision Record | **Complete** | ADR-0019 (Local Language Sidecar, Prompt Constraint Parser, and Interactive Proposal Inspector) |
+| Out-of-Process Sidecar Manager | **Complete** | `ave::LanguageSidecar` (process lifecycle, IPC query, timeout protection, crash isolation) |
+| Natural Language Prompt Parser | **Complete** | `ave::PromptParser` (duration, pacing intent, beat sync, energy, speech preservation, fallback) |
+| Interactive Proposal Review Inspector | **Complete** | `ave::ProposalInspector` (diff presentation ViewModel, stylistic fidelity score, JSON formatting) |
+| Phase 8 Unit & Integration Test | **Complete** | `ave_language_layer_test` (sidecar crash resilience, prompt constraint mapping, proposal inspector, end-to-end prompt to timeline commit) |
+| Phase 8 Exit Gate | **MET** | Language layer and interactive proposal review verified with 24/24 automated tests passing 100% |
 
 ---
 
 ## Test Verification Summary
-All 23 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
+All 24 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
 1. `VulkanProbeTest` — Physical GPU enumeration (Intel Arc Graphics 0x7d55, Vulkan 1.4.325)
 2. `SmokeTest` — Canonical rational time arithmetic & frame conversion
 3. `MediaAssetTest` — UUID generation, stream mapping, JSON serialization round-trip
@@ -177,19 +184,20 @@ All 23 automated test suites pass 100% via CTest (Local + GitHub Actions CI):
 12. `VisualPerceptionTest` — CIE L*a*b* color look, luminance contrast, inter-frame motion energy, SigLIP 2 1152-d embedding extraction, and cosine vector search index
 13. `FingerprintTest` — Multi-dimensional editing style distribution, burstiness, cut-to-beat phase, mathematical distance metric D(F1, F2), timeline extraction, and JSON roundtrip
 14. `PlannerTest` — Deterministic beat-grid planner, clip selection costs, dry-run simulation, single CompositeCommand commit, and 1-step undo/redo
-15. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
-16. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
-17. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
-18. `CompositingIntegrationTest` — End-to-end multi-track picture-in-picture compositing, spatial transform, opacity, track mute, seeking, and frame accuracy
-19. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
-20. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
-21. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
-22. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
-23. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
+15. `LanguageLayerTest` — Out-of-process sidecar crash isolation, prompt constraint parsing, proposal inspector ViewModel, and end-to-end user prompt to timeline execution
+16. `PlaybackEngineTest` — Exact frame stepping, playback clock, bounded queue backpressure, A/V sync action evaluation, seek generation drain
+17. `StreamDecoderTest` — Frame-accurate video decoding, sequential PTS advancing, seeking, and timeline prefetch worker buffering
+18. `PlaybackIntegrationTest` — End-to-end synchronized A/V playback, prefetch frame updates, audio device loopback, scrubbing tokens, and SMPTE timecode
+19. `CompositingIntegrationTest` — End-to-end multi-track picture-in-picture compositing, spatial transform, opacity, track mute, seeking, and frame accuracy
+20. `RenderGraphTest` — DAG topological sort, cycle detection, affine transformation, bilinear sampling, opacity modulation, blend modes (Over, Multiply, Screen, Add), and timeline snapshot compositing
+21. `VulkanRenderTest` — Intel Arc GPU hardware execution, bit-exact texture staging upload/download, translation, Porter-Duff Over compositing, and solid color alpha generation
+22. `AudioEngineTest` — Audio buffer metrics, lock-free SPSC ringbuffer, panning/solo/mute multi-track mixing, and audio device callback loop
+23. `FFmpegProbeTest` — Media container demuxing, video (mpeg4/yuv420p) & audio (aac/44.1kHz) stream metadata extraction
+24. `MediaCacheTest` — Video thumbnail frame decoding (160x90 RGBA) & audio waveform envelope extraction (100 peaks/sec)
 
 ---
 
-## What is Next: Phase 8 (Local Language Layer & Interactive AI Editing UI)
-1. Out-of-process local sidecar for VLM/LLM inference (Qwen3-VL / llama.cpp) isolated from the main editor process.
-2. Natural language edit prompt parser turning user intentions into planner constraints and weights.
-3. Interactive UI diff preview inspector presenting AI edit proposals with Accept/Reject/Tweak controls in Qt/QML.
+## Future Milestone: Phase 9 (Complete Professional UI Overhaul)
+*Requested by user to follow completion of all core engine & AI features:*
+- Complete visual and interaction overhaul replacing placeholder styling with an industry-grade, studio professional NLE interface (DaVinci Resolve / Premiere Pro / Final Cut Pro aesthetic).
+- Precision docked panel layout, custom dark studio color palette (#121214 / #1a1a1e), hardware-rendered vector audio meters, audio waveform drawing on tracks, frame-accurate zoomable canvas, high-DPI typography, and polished contextual controls.

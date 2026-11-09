@@ -77,6 +77,11 @@ if(TARGET ave_ai)
     target_link_libraries(ave_planner_test PRIVATE ave_ai ave_core)
     target_compile_features(ave_planner_test PRIVATE cxx_std_20)
     add_test(NAME PlannerTest COMMAND ave_planner_test)
+
+    add_executable(ave_language_layer_test language_layer_test.cpp)
+    target_link_libraries(ave_language_layer_test PRIVATE ave_ai ave_core)
+    target_compile_features(ave_language_layer_test PRIVATE cxx_std_20)
+    add_test(NAME LanguageLayerTest COMMAND ave_language_layer_test)
 endif()
 
 if(WIN32 AND EXISTS "${FFmpeg_INCLUDE_DIR}/../bin")
