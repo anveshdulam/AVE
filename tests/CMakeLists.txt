@@ -5,6 +5,10 @@ target_compile_features(ave_smoke_test PRIVATE cxx_std_20)
 if(TARGET GTest::gtest_main)
     target_compile_definitions(ave_smoke_test PRIVATE AVE_USE_GTEST)
     target_link_libraries(ave_smoke_test PRIVATE GTest::gtest_main)
+
+    add_executable(ave_phase10_time_test phase10_time_test.cpp)
+    target_link_libraries(ave_phase10_time_test PRIVATE ave_core GTest::gtest_main)
+    target_compile_features(ave_phase10_time_test PRIVATE cxx_std_20)
 endif()
 
 add_executable(ave_media_asset_test media_asset_test.cpp)
@@ -40,6 +44,9 @@ target_compile_features(ave_timeline_ui_test PRIVATE cxx_std_20)
 
 include(CTest)
 add_test(NAME SmokeTest COMMAND ave_smoke_test)
+if(TARGET ave_phase10_time_test)
+    add_test(NAME Phase10TimeTest COMMAND ave_phase10_time_test)
+endif()
 add_test(NAME MediaAssetTest COMMAND ave_media_asset_test)
 add_test(NAME MediaPoolTest COMMAND ave_media_pool_test)
 add_test(NAME TimelineTest COMMAND ave_timeline_test)
@@ -152,4 +159,107 @@ if(TARGET ave_media)
     target_compile_features(ave_media_cache_test PRIVATE cxx_std_20)
     add_test(NAME MediaCacheTest COMMAND ave_media_cache_test "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sample_test.mp4")
     set_tests_properties(MediaCacheTest PROPERTIES ENVIRONMENT "PATH=${FFmpeg_INCLUDE_DIR}/../bin;${CMAKE_CURRENT_BINARY_DIR};$ENV{PATH}")
+endif()
+
+if(TARGET GTest::gtest AND TARGET ave_desktop_services AND TARGET ave_playback AND TARGET ave_media)
+    add_executable(ave_phase10_import_test phase10_import_test.cpp)
+    target_link_libraries(ave_phase10_import_test PRIVATE
+        ave_desktop_services
+        ave_playback
+        ave_media
+        ave_core
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+    )
+    target_compile_definitions(ave_phase10_import_test PRIVATE
+        AVE_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+    )
+    target_compile_features(ave_phase10_import_test PRIVATE cxx_std_20)
+
+    add_test(NAME Phase10ImportTest COMMAND ave_phase10_import_test)
+    get_target_property(_ave_qt6_qmake_test Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(_ave_qt6_bin_dir_test "${_ave_qt6_qmake_test}" DIRECTORY)
+    set_tests_properties(Phase10ImportTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=${_ave_qt6_bin_dir_test};${FFmpeg_INCLUDE_DIR}/../bin;${CMAKE_CURRENT_BINARY_DIR};$ENV{PATH}"
+    )
+
+    if(TARGET ave_render AND TARGET ave_audio)
+        add_executable(ave_phase10_frame_provider_test phase10_frame_provider_test.cpp)
+        target_link_libraries(ave_phase10_frame_provider_test PRIVATE
+            ave_desktop_services
+            ave_playback
+            ave_render
+            ave_audio
+            ave_core
+            GTest::gtest
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Quick
+            Qt6::Qml
+            Qt6::Test
+        )
+        target_compile_definitions(ave_phase10_frame_provider_test PRIVATE
+            AVE_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+        )
+        target_compile_features(ave_phase10_frame_provider_test PRIVATE cxx_std_20)
+
+        add_test(NAME Phase10FrameProviderTest COMMAND ave_phase10_frame_provider_test)
+        set_tests_properties(Phase10FrameProviderTest PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=${_ave_qt6_bin_dir_test};${FFmpeg_INCLUDE_DIR}/../bin;${CMAKE_CURRENT_BINARY_DIR};$ENV{PATH}"
+        )
+
+        add_executable(ave_phase10_services_property_test phase10_services_property_test.cpp)
+        target_link_libraries(ave_phase10_services_property_test PRIVATE
+            ave_desktop_services
+            ave_ai
+            ave_playback
+            ave_media
+            ave_render
+            ave_audio
+            ave_core
+            GTest::gtest
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Quick
+            Qt6::Qml
+            Qt6::Test
+        )
+        target_compile_definitions(ave_phase10_services_property_test PRIVATE
+            AVE_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+        )
+        target_compile_features(ave_phase10_services_property_test PRIVATE cxx_std_20)
+
+        add_test(NAME Phase10ServicesPropertyTest COMMAND ave_phase10_services_property_test)
+        set_tests_properties(Phase10ServicesPropertyTest PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=${_ave_qt6_bin_dir_test};${FFmpeg_INCLUDE_DIR}/../bin;${CMAKE_CURRENT_BINARY_DIR};$ENV{PATH}"
+        )
+
+        if(TARGET ave_ai)
+            add_executable(ave_phase10_ai_studio_test phase10_ai_studio_test.cpp)
+            target_link_libraries(ave_phase10_ai_studio_test PRIVATE
+                ave_desktop_services
+                ave_ai
+                ave_playback
+                ave_media
+                ave_render
+                ave_audio
+                ave_core
+                GTest::gtest
+                Qt6::Core
+                Qt6::Gui
+                Qt6::Test
+            )
+            target_compile_definitions(ave_phase10_ai_studio_test PRIVATE
+                AVE_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+            )
+            target_compile_features(ave_phase10_ai_studio_test PRIVATE cxx_std_20)
+
+            add_test(NAME Phase10AiStudioTest COMMAND ave_phase10_ai_studio_test)
+            set_tests_properties(Phase10AiStudioTest PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=${_ave_qt6_bin_dir_test};${FFmpeg_INCLUDE_DIR}/../bin;${CMAKE_CURRENT_BINARY_DIR};$ENV{PATH}"
+            )
+        endif()
+    endif()
 endif()

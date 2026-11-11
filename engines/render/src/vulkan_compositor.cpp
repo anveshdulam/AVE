@@ -103,15 +103,15 @@ std::unique_ptr<VulkanCompositor> VulkanCompositor::create(const VulkanDevice& d
         return nullptr;
     }
 
-    // 5. Create Descriptor Pool
+    // 5. Create Descriptor Pool (pre-allocated slot banks + headroom for compatibility composite())
     VkDescriptorPoolSize pool_size{};
     pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    pool_size.descriptorCount = 32;
+    pool_size.descriptorCount = 192;
 
     VkDescriptorPoolCreateInfo dp_info{};
     dp_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     dp_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    dp_info.maxSets = 16;
+    dp_info.maxSets = 80;
     dp_info.poolSizeCount = 1;
     dp_info.pPoolSizes = &pool_size;
 
@@ -119,13 +119,115 @@ std::unique_ptr<VulkanCompositor> VulkanCompositor::create(const VulkanDevice& d
         return nullptr;
     }
 
-    // 6. Create 1x1 Dummy Texture for solid-color/null fg inputs
-    comp->dummy_texture_ = VulkanTexture::create(device, 1, 1);
-    if (comp->dummy_texture_) {
-        comp->dummy_texture_->transition_layout(VK_IMAGE_LAYOUT_GENERAL);
+    // Pre-allocate deterministic 2-slot descriptor banks so recorded playback passes
+    // perform zero per-frame descriptor allocations.
+    for (std::size_t bank = 0; bank < kSlotBanks; ++bank) {
+        std::array<VkDescriptorSetLayout, kMaxRecordedPassesPerSlot> bank_layouts{};
+        bank_layouts.fill(comp->desc_layout_);
+
+        VkDescriptorSetAllocateInfo bank_alloc{};
+        bank_alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        bank_alloc.descriptorPool = comp->desc_pool_;
+        bank_alloc.descriptorSetCount = static_cast<uint32_t>(kMaxRecordedPassesPerSlot);
+        bank_alloc.pSetLayouts = bank_layouts.data();
+
+        if (vkAllocateDescriptorSets(dev, &bank_alloc, comp->slot_desc_sets_[bank].data()) != VK_SUCCESS) {
+            return nullptr;
+        }
     }
 
+    // 6. Create 1x1 Dummy Texture for solid-color/null fg inputs
+    comp->dummy_texture_ = VulkanTexture::create(device, 1, 1);
+    if (!comp->dummy_texture_) {
+        return nullptr;
+    }
+    comp->dummy_texture_->transition_layout(VK_IMAGE_LAYOUT_GENERAL);
+
     return comp;
+}
+
+bool VulkanCompositor::record_composite_pass(VkCommandBuffer cmd,
+                                             std::size_t slot_idx,
+                                             std::size_t pass_idx,
+                                             VulkanTexture* input_fg,
+                                             VulkanTexture& output_target,
+                                             const CompositorPushConstants& pc,
+                                             bool insert_post_barrier) {
+    if (cmd == VK_NULL_HANDLE ||
+        slot_idx >= kSlotBanks ||
+        pass_idx >= kMaxRecordedPassesPerSlot ||
+        output_target.image_view() == VK_NULL_HANDLE ||
+        output_target.width() <= 0 ||
+        output_target.height() <= 0 ||
+        (!input_fg && (!dummy_texture_ || dummy_texture_->image_view() == VK_NULL_HANDLE))) {
+        return false;
+    }
+
+    VkDescriptorSet desc_set = slot_desc_sets_[slot_idx][pass_idx];
+    if (desc_set == VK_NULL_HANDLE) {
+        return false;
+    }
+
+    VkDescriptorImageInfo in_image_info{};
+    in_image_info.imageView = input_fg ? input_fg->image_view() : dummy_texture_->image_view();
+    in_image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkDescriptorImageInfo out_image_info{};
+    out_image_info.imageView = output_target.image_view();
+    out_image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkWriteDescriptorSet writes[2]{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = desc_set;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[0].descriptorCount = 1;
+    writes[0].pImageInfo = &in_image_info;
+
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = desc_set;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[1].descriptorCount = 1;
+    writes[1].pImageInfo = &out_image_info;
+
+    vkUpdateDescriptorSets(device_.device(), 2, writes, 0, nullptr);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_, 0, 1, &desc_set, 0, nullptr);
+    vkCmdPushConstants(cmd, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(CompositorPushConstants), &pc);
+
+    const uint32_t group_x = (static_cast<uint32_t>(output_target.width()) + 15u) / 16u;
+    const uint32_t group_y = (static_cast<uint32_t>(output_target.height()) + 15u) / 16u;
+    vkCmdDispatch(cmd, group_x, group_y, 1);
+
+    if (insert_post_barrier) {
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = output_target.image();
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+
+        vkCmdPipelineBarrier(
+            cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0,
+            0, nullptr,
+            0, nullptr,
+            1, &barrier);
+    }
+
+    return true;
 }
 
 void VulkanCompositor::composite(VulkanTexture* input_fg, VulkanTexture& output_target, const CompositorPushConstants& pc) {

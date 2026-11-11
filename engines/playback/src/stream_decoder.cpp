@@ -8,11 +8,27 @@ extern "C" {
 #include <libavutil/avutil.h>
 }
 
-#include <iostream>
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace ave {
+namespace {
+
+int stream_decoder_interrupt_cb(void* opaque) noexcept {
+    if (!opaque) {
+        return 0;
+    }
+    const auto* cancel = static_cast<const std::atomic<bool>*>(opaque);
+    return cancel->load(std::memory_order_acquire) ? 1 : 0;
+}
+
+std::string path_to_utf8(const std::filesystem::path& path) {
+    const auto u8 = path.u8string();
+    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+}
+
+} // namespace
 
 StreamDecoder::StreamDecoder() = default;
 
@@ -22,6 +38,7 @@ StreamDecoder::~StreamDecoder() {
 
 StreamDecoder::StreamDecoder(StreamDecoder&& other) noexcept
     : file_path_(std::move(other.file_path_)),
+      cancel_state_(std::move(other.cancel_state_)),
       format_ctx_(other.format_ctx_),
       codec_ctx_(other.codec_ctx_),
       raw_frame_(other.raw_frame_),
@@ -50,6 +67,7 @@ StreamDecoder& StreamDecoder::operator=(StreamDecoder&& other) noexcept {
         free_resources();
 
         file_path_ = std::move(other.file_path_);
+        cancel_state_ = std::move(other.cancel_state_);
         format_ctx_ = other.format_ctx_;
         codec_ctx_ = other.codec_ctx_;
         raw_frame_ = other.raw_frame_;
@@ -80,20 +98,47 @@ bool StreamDecoder::is_open() const noexcept {
     return format_ctx_ != nullptr && codec_ctx_ != nullptr && video_stream_index_ >= 0;
 }
 
-bool StreamDecoder::open(const std::filesystem::path& file_path) {
+void StreamDecoder::request_cancel() noexcept {
+    if (cancel_state_) {
+        cancel_state_->store(true, std::memory_order_release);
+    }
+}
+
+bool StreamDecoder::is_cancelled() const noexcept {
+    return cancel_state_ && cancel_state_->load(std::memory_order_acquire);
+}
+
+bool StreamDecoder::open(const std::filesystem::path& file_path,
+                         std::shared_ptr<std::atomic<bool>> cancel_state) {
     close();
 
-    if (!std::filesystem::exists(file_path)) {
+    cancel_state_ = cancel_state ? std::move(cancel_state) : std::make_shared<std::atomic<bool>>(false);
+    if (cancel_state_->load(std::memory_order_acquire)) {
+        cancel_state_.reset();
         return false;
     }
 
-    std::string path_str = file_path.string();
+    std::error_code ec;
+    if (!std::filesystem::exists(file_path, ec)) {
+        cancel_state_.reset();
+        return false;
+    }
+
+    format_ctx_ = avformat_alloc_context();
+    if (!format_ctx_) {
+        free_resources();
+        return false;
+    }
+    format_ctx_->interrupt_callback.callback = &stream_decoder_interrupt_cb;
+    format_ctx_->interrupt_callback.opaque = cancel_state_.get();
+
+    const std::string path_str = path_to_utf8(file_path);
     if (avformat_open_input(&format_ctx_, path_str.c_str(), nullptr, nullptr) < 0) {
         free_resources();
         return false;
     }
 
-    if (avformat_find_stream_info(format_ctx_, nullptr) < 0) {
+    if (avformat_find_stream_info(format_ctx_, nullptr) < 0 || is_cancelled()) {
         free_resources();
         return false;
     }
@@ -194,6 +239,7 @@ void StreamDecoder::free_resources() noexcept {
     if (format_ctx_) {
         avformat_close_input(&format_ctx_);
     }
+    cancel_state_.reset();
 
     file_path_.clear();
     video_stream_index_ = -1;
@@ -209,14 +255,14 @@ void StreamDecoder::free_resources() noexcept {
 }
 
 bool StreamDecoder::seek_pts(Rational target_pts) {
-    if (!is_open()) return false;
+    if (!is_open() || is_cancelled()) return false;
 
     double pts_sec = static_cast<double>(target_pts.numerator()) / static_cast<double>(target_pts.denominator());
     double tb_sec = static_cast<double>(timebase_.numerator()) / static_cast<double>(timebase_.denominator());
     int64_t target_ts = (tb_sec > 0.0) ? static_cast<int64_t>(pts_sec / tb_sec) : 0;
 
     int ret = avformat_seek_file(format_ctx_, video_stream_index_, INT64_MIN, target_ts, target_ts, AVSEEK_FLAG_BACKWARD);
-    if (ret < 0) {
+    if (ret < 0 || is_cancelled()) {
         return false;
     }
 
@@ -228,9 +274,13 @@ bool StreamDecoder::seek_pts(Rational target_pts) {
 std::optional<VideoFrame> StreamDecoder::decode_next_frame(uint64_t seek_generation,
                                                          int target_w,
                                                          int target_h) {
-    if (!is_open()) return std::nullopt;
+    if (!is_open() || is_cancelled()) return std::nullopt;
 
     while (true) {
+        if (is_cancelled()) {
+            return std::nullopt;
+        }
+
         int ret = avcodec_receive_frame(codec_ctx_, raw_frame_);
         if (ret == 0) {
             // Frame successfully decoded
@@ -261,7 +311,7 @@ std::optional<VideoFrame> StreamDecoder::decode_next_frame(uint64_t seek_generat
                 return std::nullopt;
             }
 
-            std::vector<uint8_t> rgba_data(static_cast<size_t>(out_w) * static_cast<size_t>(out_h) * 4);
+            std::vector<uint8_t> rgba_data(static_cast<size_t>(out_w) * static_cast<size_t>(out_h) * 4u);
             uint8_t* dst_data[4] = { rgba_data.data(), nullptr, nullptr, nullptr };
             int dst_linesize[4] = { out_w * 4, 0, 0, 0 };
 
@@ -281,9 +331,15 @@ std::optional<VideoFrame> StreamDecoder::decode_next_frame(uint64_t seek_generat
         }
 
         if (ret == AVERROR(EAGAIN)) {
+            if (is_cancelled()) {
+                return std::nullopt;
+            }
             // Need to supply packets to the decoder
             int read_ret = av_read_frame(format_ctx_, packet_);
             if (read_ret < 0) {
+                if (read_ret == AVERROR_EXIT || is_cancelled()) {
+                    return std::nullopt;
+                }
                 // EOF or error: flush decoder
                 avcodec_send_packet(codec_ctx_, nullptr);
                 // Try to receive any final buffered frames

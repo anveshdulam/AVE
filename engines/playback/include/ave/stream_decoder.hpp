@@ -3,6 +3,7 @@
 #include "ave/time.hpp"
 #include "ave/frame_queue.hpp"
 
+#include <atomic>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -18,7 +19,7 @@ namespace ave {
 
 /**
  * @brief Thread-safe (per instance) FFmpeg media stream decoder with frame-accurate
- * seeking, RGBA frame scaling, and exact rational timestamps.
+ * seeking, RGBA frame scaling, exact rational timestamps, and cooperative AVIOInterruptCB cancellation.
  */
 class StreamDecoder {
 public:
@@ -34,7 +35,18 @@ public:
     /**
      * @brief Opens the media file, discovers streams, and initializes the video decoder.
      */
-    bool open(const std::filesystem::path& file_path);
+    bool open(const std::filesystem::path& file_path,
+              std::shared_ptr<std::atomic<bool>> cancel_state = nullptr);
+
+    /**
+     * @brief Requests cooperative cancellation of blocking FFmpeg operations.
+     */
+    void request_cancel() noexcept;
+
+    /**
+     * @brief Returns true if cancellation has been requested for the active session.
+     */
+    [[nodiscard]] bool is_cancelled() const noexcept;
 
     /**
      * @brief Closes decoder and releases all FFmpeg resources.
@@ -67,6 +79,7 @@ public:
 
 private:
     std::filesystem::path file_path_{};
+    std::shared_ptr<std::atomic<bool>> cancel_state_{};
     AVFormatContext* format_ctx_{nullptr};
     AVCodecContext* codec_ctx_{nullptr};
     AVFrame* raw_frame_{nullptr};

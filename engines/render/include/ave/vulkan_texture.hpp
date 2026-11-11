@@ -27,6 +27,7 @@ public:
     VkImage image() const noexcept { return image_; }
     VkImageView image_view() const noexcept { return image_view_; }
     VkImageLayout current_layout() const noexcept { return current_layout_; }
+    void set_current_layout(VkImageLayout layout) noexcept { current_layout_ = layout; }
 
     // Synchronous layout transition helper via pipeline barrier
     void transition_layout(VkImageLayout new_layout);

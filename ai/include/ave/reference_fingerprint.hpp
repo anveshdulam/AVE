@@ -69,12 +69,13 @@ struct FingerprintDistanceWeights {
 };
 
 struct FingerprintDistanceBreakdown {
-    double total_distance = 0.0; // Scaled to [0.0, 1.0]
+    double total_distance = 0.0; // Scaled to [0.0, 1.0], or quiet_NaN() if invalid
     double pacing_dist = 0.0;
     double rhythm_dist = 0.0;
     double transition_dist = 0.0;
     double motion_dist = 0.0;
     double color_dist = 0.0;
+    bool valid = true;
 };
 
 /**

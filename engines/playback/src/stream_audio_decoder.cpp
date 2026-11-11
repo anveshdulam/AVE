@@ -10,11 +10,27 @@ extern "C" {
 #include <libavutil/avutil.h>
 }
 
-#include <iostream>
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace ave {
+namespace {
+
+int stream_audio_interrupt_cb(void* opaque) noexcept {
+    if (!opaque) {
+        return 0;
+    }
+    const auto* cancel = static_cast<const std::atomic<bool>*>(opaque);
+    return cancel->load(std::memory_order_acquire) ? 1 : 0;
+}
+
+std::string path_to_utf8(const std::filesystem::path& path) {
+    const auto u8 = path.u8string();
+    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+}
+
+} // namespace
 
 StreamAudioDecoder::StreamAudioDecoder() = default;
 
@@ -24,6 +40,7 @@ StreamAudioDecoder::~StreamAudioDecoder() {
 
 StreamAudioDecoder::StreamAudioDecoder(StreamAudioDecoder&& other) noexcept
     : file_path_(std::move(other.file_path_)),
+      cancel_state_(std::move(other.cancel_state_)),
       format_ctx_(other.format_ctx_),
       codec_ctx_(other.codec_ctx_),
       raw_frame_(other.raw_frame_),
@@ -47,6 +64,7 @@ StreamAudioDecoder& StreamAudioDecoder::operator=(StreamAudioDecoder&& other) no
     if (this != &other) {
         free_resources();
         file_path_ = std::move(other.file_path_);
+        cancel_state_ = std::move(other.cancel_state_);
         format_ctx_ = other.format_ctx_;
         codec_ctx_ = other.codec_ctx_;
         raw_frame_ = other.raw_frame_;
@@ -85,11 +103,22 @@ void StreamAudioDecoder::free_resources() noexcept {
     if (format_ctx_) {
         avformat_close_input(&format_ctx_);
     }
+    cancel_state_.reset();
     audio_stream_index_ = -1;
 }
 
 bool StreamAudioDecoder::is_open() const noexcept {
     return format_ctx_ != nullptr && codec_ctx_ != nullptr && swr_ctx_ != nullptr;
+}
+
+void StreamAudioDecoder::request_cancel() noexcept {
+    if (cancel_state_) {
+        cancel_state_->store(true, std::memory_order_release);
+    }
+}
+
+bool StreamAudioDecoder::is_cancelled() const noexcept {
+    return cancel_state_ && cancel_state_->load(std::memory_order_acquire);
 }
 
 void StreamAudioDecoder::close() {
@@ -98,20 +127,40 @@ void StreamAudioDecoder::close() {
 }
 
 bool StreamAudioDecoder::open(const std::filesystem::path& file_path,
-                             uint32_t target_sample_rate,
-                             int target_channels) {
+                              uint32_t target_sample_rate,
+                              int target_channels,
+                              std::shared_ptr<std::atomic<bool>> cancel_state) {
     free_resources();
+    cancel_state_ = cancel_state ? std::move(cancel_state) : std::make_shared<std::atomic<bool>>(false);
+    if (cancel_state_->load(std::memory_order_acquire)) {
+        cancel_state_.reset();
+        file_path_.clear();
+        return false;
+    }
+
     file_path_ = file_path;
     target_sample_rate_ = target_sample_rate;
     target_channels_ = target_channels > 0 ? target_channels : 2;
 
-    std::string path_str = file_path.string();
+    format_ctx_ = avformat_alloc_context();
+    if (!format_ctx_) {
+        free_resources();
+        file_path_.clear();
+        return false;
+    }
+    format_ctx_->interrupt_callback.callback = &stream_audio_interrupt_cb;
+    format_ctx_->interrupt_callback.opaque = cancel_state_.get();
+
+    const std::string path_str = path_to_utf8(file_path);
     if (avformat_open_input(&format_ctx_, path_str.c_str(), nullptr, nullptr) < 0) {
+        free_resources();
+        file_path_.clear();
         return false;
     }
 
-    if (avformat_find_stream_info(format_ctx_, nullptr) < 0) {
+    if (avformat_find_stream_info(format_ctx_, nullptr) < 0 || is_cancelled()) {
         free_resources();
+        file_path_.clear();
         return false;
     }
 
@@ -125,6 +174,7 @@ bool StreamAudioDecoder::open(const std::filesystem::path& file_path,
 
     if (audio_stream_index_ < 0) {
         free_resources();
+        file_path_.clear();
         return false;
     }
 
@@ -132,27 +182,31 @@ bool StreamAudioDecoder::open(const std::filesystem::path& file_path,
     const AVCodec* decoder = avcodec_find_decoder(stream->codecpar->codec_id);
     if (!decoder) {
         free_resources();
+        file_path_.clear();
         return false;
     }
 
     codec_ctx_ = avcodec_alloc_context3(decoder);
     if (!codec_ctx_) {
         free_resources();
+        file_path_.clear();
         return false;
     }
 
     if (avcodec_parameters_to_context(codec_ctx_, stream->codecpar) < 0) {
         free_resources();
+        file_path_.clear();
         return false;
     }
 
     if (avcodec_open2(codec_ctx_, decoder, nullptr) < 0) {
         free_resources();
+        file_path_.clear();
         return false;
     }
 
     // Set up SwrContext
-    AVChannelLayout out_layout;
+    AVChannelLayout out_layout{};
     av_channel_layout_default(&out_layout, target_channels_);
 
     int ret = swr_alloc_set_opts2(
@@ -170,6 +224,7 @@ bool StreamAudioDecoder::open(const std::filesystem::path& file_path,
 
     if (ret < 0 || !swr_ctx_ || swr_init(swr_ctx_) < 0) {
         free_resources();
+        file_path_.clear();
         return false;
     }
 
@@ -177,6 +232,7 @@ bool StreamAudioDecoder::open(const std::filesystem::path& file_path,
     packet_ = av_packet_alloc();
     if (!raw_frame_ || !packet_) {
         free_resources();
+        file_path_.clear();
         return false;
     }
 
@@ -198,7 +254,7 @@ bool StreamAudioDecoder::open(const std::filesystem::path& file_path,
 }
 
 bool StreamAudioDecoder::seek_pts(Rational target_pts) {
-    if (!is_open()) {
+    if (!is_open() || is_cancelled()) {
         return false;
     }
 
@@ -207,7 +263,7 @@ bool StreamAudioDecoder::seek_pts(Rational target_pts) {
         (static_cast<double>(target_pts.numerator()) / static_cast<double>(target_pts.denominator())) *
         (static_cast<double>(stream->time_base.den) / static_cast<double>(stream->time_base.num))));
 
-    if (avformat_seek_file(format_ctx_, audio_stream_index_, INT64_MIN, target_ts, target_ts, 0) < 0) {
+    if (avformat_seek_file(format_ctx_, audio_stream_index_, INT64_MIN, target_ts, target_ts, 0) < 0 || is_cancelled()) {
         return false;
     }
 
@@ -217,11 +273,15 @@ bool StreamAudioDecoder::seek_pts(Rational target_pts) {
 }
 
 std::optional<AudioBuffer> StreamAudioDecoder::decode_next_audio() {
-    if (!is_open()) {
+    if (!is_open() || is_cancelled()) {
         return std::nullopt;
     }
 
     while (true) {
+        if (is_cancelled()) {
+            return std::nullopt;
+        }
+
         int ret = avcodec_receive_frame(codec_ctx_, raw_frame_);
         if (ret == 0) {
             int out_samples = swr_get_out_samples(swr_ctx_, raw_frame_->nb_samples);
@@ -250,7 +310,7 @@ std::optional<AudioBuffer> StreamAudioDecoder::decode_next_audio() {
         }
 
         int read_ret = av_read_frame(format_ctx_, packet_);
-        if (read_ret < 0) {
+        if (read_ret < 0 || read_ret == AVERROR_EXIT || is_cancelled()) {
             return std::nullopt;
         }
 

@@ -3,8 +3,16 @@
 -Imedia/include
 -Iengines/playback/include
 -Iengines/audio/include
+-Iengines/render/include
+-Iai/include
+-Iapps/desktop/include
 -IC:/VulkanSDK/1.4.363.0/Include
 -ID:/DevTools/ffmpeg/include
+-ID:/Qt/6.8.3/msvc2022_64/include
+-ID:/Qt/6.8.3/msvc2022_64/include/QtCore
+-ID:/Qt/6.8.3/msvc2022_64/include/QtGui
+-ID:/Qt/6.8.3/msvc2022_64/include/QtTest
+-Ivcpkg_installed/x64-windows/include
 -DNOMINMAX
 -DWIN32_LEAN_AND_MEAN
 -D_CRT_SECURE_NO_WARNINGS

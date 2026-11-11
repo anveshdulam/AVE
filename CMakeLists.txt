@@ -70,12 +70,12 @@ add_subdirectory(engines)
 
 # Presentation desktop application
 if(AVE_BUILD_DESKTOP)
-    find_package(Qt6 6.5 QUIET COMPONENTS Core Gui Quick Qml)
-    if(Qt6_FOUND)
-        message(STATUS "Qt 6 found: enabling Qt Quick desktop UI.")
-    else()
-        message(STATUS "Qt 6 not found; desktop UI builds in headless/presentation model mode.")
+    if(WIN32 AND NOT DEFINED Qt6_DIR AND "$ENV{Qt6_DIR}" STREQUAL "" AND EXISTS "D:/Qt/6.8.3/msvc2022_64/lib/cmake/Qt6")
+        list(APPEND CMAKE_PREFIX_PATH "D:/Qt/6.8.3/msvc2022_64")
     endif()
+    set(CMAKE_AUTOMOC ON)
+    find_package(Qt6 6.8.3 REQUIRED COMPONENTS Core Gui Quick Qml QuickControls2 Test)
+    message(STATUS "Qt ${Qt6_VERSION} found (${Qt6_DIR}): enabling native Qt Quick desktop UI.")
     add_subdirectory(apps/desktop)
 endif()
 

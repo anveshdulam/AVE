@@ -12,6 +12,7 @@ namespace ave {
  */
 struct VideoFrame {
     uint64_t seek_generation{0};
+    uint64_t snapshot_version{0};
     Rational pts{0, 1};
     Rational duration{0, 1};
     int width{0};

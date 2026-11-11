@@ -2,6 +2,7 @@ if(TARGET FFmpeg::FFmpeg)
     add_library(ave_playback STATIC
         src/playback_clock.cpp
         src/playback_controller.cpp
+        src/playback_snapshot.cpp
         src/stream_decoder.cpp
         src/stream_audio_decoder.cpp
         src/timeline_prefetcher.cpp
@@ -9,6 +10,7 @@ if(TARGET FFmpeg::FFmpeg)
         include/ave/playback_clock.hpp
         include/ave/frame_queue.hpp
         include/ave/playback_controller.hpp
+        include/ave/playback_snapshot.hpp
         include/ave/stream_decoder.hpp
         include/ave/stream_audio_decoder.hpp
         include/ave/timeline_prefetcher.hpp

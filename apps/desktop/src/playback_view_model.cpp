@@ -24,7 +24,11 @@ Rational PlaybackViewModel::current_pts() const noexcept {
 }
 
 std::string PlaybackViewModel::current_timecode() const {
-    return Timecode::from_rational(session_.current_time(), sequence_fps_).to_string();
+    const Rational session_fps = session_.clock().frame_rate();
+    const Rational fps = (session_fps.numerator() > 0 && session_fps.denominator() > 0)
+                             ? session_fps
+                             : sequence_fps_;
+    return Timecode::from_rational(session_.current_time(), fps).to_string();
 }
 
 bool PlaybackViewModel::is_compositing_enabled() const noexcept {
@@ -77,8 +81,19 @@ void PlaybackViewModel::seek(Rational target_pts) {
 }
 
 void PlaybackViewModel::seek_timecode(const std::string& timecode_str) {
-    Timecode tc = Timecode::from_string(timecode_str);
-    seek(tc.to_rational(sequence_fps_));
+    const auto tc = Timecode::try_from_string(timecode_str);
+    const Rational session_fps = session_.clock().frame_rate();
+    const Rational fps = (session_fps.numerator() > 0 && session_fps.denominator() > 0)
+                             ? session_fps
+                             : sequence_fps_;
+    if (!tc.has_value() || !tc->is_valid(fps)) {
+        return;
+    }
+    try {
+        seek(tc->to_rational(fps));
+    } catch (const std::exception&) {
+        return;
+    }
 }
 
 void PlaybackViewModel::step_forward(int64_t frames) {

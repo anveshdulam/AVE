@@ -1,6 +1,7 @@
 #include "ave/command.hpp"
 
 #include <algorithm>
+#include <atomic>
 
 namespace ave {
 
@@ -435,6 +436,7 @@ CommandResult CommandHistory::execute(std::unique_ptr<Command> cmd, Timeline& ti
     }
 
     current_index_++;
+    mutation_revision_++;
     notify_listeners();
     return res;
 }
@@ -455,6 +457,7 @@ CommandResult CommandHistory::undo(Timeline& timeline, MediaPool& pool) {
 
     redo_stack_.push_back(std::move(cmd));
     current_index_--;
+    mutation_revision_++;
     notify_listeners();
     return res;
 }
@@ -475,6 +478,7 @@ CommandResult CommandHistory::redo(Timeline& timeline, MediaPool& pool) {
 
     undo_stack_.push_back(std::move(cmd));
     current_index_++;
+    mutation_revision_++;
     notify_listeners();
     return res;
 }
@@ -484,6 +488,7 @@ void CommandHistory::clear() {
     redo_stack_.clear();
     current_index_ = 0;
     clean_index_ = 0;
+    mutation_revision_++;
     notify_listeners();
 }
 
@@ -497,12 +502,32 @@ void CommandHistory::mark_clean() noexcept {
 }
 
 void CommandHistory::add_change_listener(ChangeListener listener) {
-    listeners_.push_back(std::move(listener));
+    (void)add_change_listener_with_id(std::move(listener));
+}
+
+CommandHistory::ListenerId CommandHistory::add_change_listener_with_id(ChangeListener listener) {
+    static std::atomic<ListenerId> s_next_listener_id{1};
+    const ListenerId id = s_next_listener_id.fetch_add(1, std::memory_order_relaxed);
+    listeners_.push_back(ListenerEntry{id, std::move(listener)});
+    return id;
+}
+
+void CommandHistory::remove_change_listener(ListenerId id) {
+    if (id == 0) {
+        return;
+    }
+    listeners_.erase(
+        std::remove_if(listeners_.begin(), listeners_.end(),
+            [id](const ListenerEntry& entry) { return entry.id == id; }),
+        listeners_.end());
 }
 
 void CommandHistory::notify_listeners() {
-    for (const auto& l : listeners_) {
-        if (l) l();
+    const auto listeners_copy = listeners_;
+    for (const auto& entry : listeners_copy) {
+        if (entry.callback) {
+            entry.callback();
+        }
     }
 }
 

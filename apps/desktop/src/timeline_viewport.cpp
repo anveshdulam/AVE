@@ -32,20 +32,18 @@ double TimelineViewport::time_to_pixel(Rational time) const noexcept {
 }
 
 Rational TimelineViewport::pixel_to_time(double pixel, Rational frame_rate) const {
-    double canvas_px = pixel + scroll_offset_x_;
-    if (canvas_px <= 0.0) {
+    const double canvas_px = pixel + scroll_offset_x_;
+    const Rational effective_fps =
+        (frame_rate.numerator() > 0 && frame_rate.denominator() > 0)
+            ? frame_rate
+            : Rational{24, 1};
+
+    if (pixels_per_second_ <= 0.0 || !std::isfinite(pixels_per_second_)) {
         return Rational{0, 1};
     }
 
-    double secs = canvas_px / pixels_per_second_;
-    double fps = frame_rate.to_seconds();
-    if (fps <= 0.0) fps = 24.0;
-
-    int64_t frame_idx = static_cast<int64_t>(std::round(secs * fps));
-    int64_t fps_int = static_cast<int64_t>(std::round(fps));
-    if (fps_int <= 0) fps_int = 24;
-
-    return Rational{frame_idx, fps_int};
+    const double secs = canvas_px / pixels_per_second_;
+    return ui_seconds_to_rational_pts_safe(secs, effective_fps).pts;
 }
 
 std::pair<Rational, Rational> TimelineViewport::visible_time_range(Rational frame_rate) const {

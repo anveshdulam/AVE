@@ -53,6 +53,10 @@ public:
 
     void seek(Rational target_time);
 
+    void set_snapshot_version(uint64_t version) noexcept;
+    [[nodiscard]] uint64_t snapshot_version() const noexcept;
+    void set_timeline_timing(Rational frame_rate, Rational duration);
+
     [[nodiscard]] PlaybackMetrics metrics() const noexcept;
     void reset_metrics() noexcept;
 
@@ -63,6 +67,8 @@ private:
     mutable std::mutex metrics_mutex_{};
     PlaybackMetrics metrics_{};
 
+    std::atomic<uint64_t> snapshot_version_{0};
+    mutable std::mutex timing_mutex_{};
     // Frame synchronization tolerance (e.g. 1/2 frame duration)
     Rational sync_tolerance_{};
 };

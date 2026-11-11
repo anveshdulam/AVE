@@ -545,6 +545,13 @@ Timeline Timeline::from_json(const std::string& json_text) {
             Track track(std::move(t_id), std::move(t_name), t_type, t_index);
 
             size_t items_pos = track_json.find("\"items\":");
+            const std::string track_header = (items_pos != std::string::npos)
+                ? track_json.substr(0, items_pos)
+                : track_json;
+            if (track_header.find("\"muted\": true") != std::string::npos ||
+                track_header.find("\"muted\":true") != std::string::npos) {
+                track.set_muted(true);
+            }
             if (items_pos != std::string::npos) {
                 size_t i_arr_start = track_json.find('[', items_pos);
                 size_t i_arr_end = track_json.rfind(']');

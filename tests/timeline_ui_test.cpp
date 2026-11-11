@@ -7,6 +7,7 @@
 #include <iostream>
 #include <cmath>
 #include <cassert>
+#include <limits>
 
 #define ASSERT_TRUE(cond) \
     do { \
@@ -53,6 +54,13 @@ int main() {
     // Pixel to Time (quantized to 24fps)
     ave::Rational t_back = viewport.pixel_to_time(100.0, fps);
     ASSERT_EQ(t_back, ave::Rational(1, 1));
+
+    // Safe Pixel to Time boundary hardening (fractional FPS, NaN, +-Inf, negative)
+    ASSERT_EQ(viewport.pixel_to_time(std::numeric_limits<double>::quiet_NaN(), fps), ave::Rational(0, 1));
+    ASSERT_EQ(viewport.pixel_to_time(-std::numeric_limits<double>::infinity(), fps), ave::Rational(0, 1));
+    ASSERT_EQ(viewport.pixel_to_time(std::numeric_limits<double>::infinity(), fps), ave::Rational(864000, 1));
+    ASSERT_EQ(viewport.pixel_to_time(100.0 * (1001.0 / 30000.0), ave::Rational{30000, 1001}),
+              ave::Rational(1001, 30000));
 
     // Scroll offset test
     viewport.set_scroll_offset_x(50.0);

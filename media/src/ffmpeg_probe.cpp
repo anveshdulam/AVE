@@ -4,67 +4,144 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
+#include <libavutil/mem.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/channel_layout.h>
 }
 
-#include <iostream>
 #include <sstream>
+#include <utility>
 
 namespace ave {
+namespace {
 
-std::string FFmpegProbe::ffmpeg_version_info() {
-    std::ostringstream ss;
-    ss << "FFmpeg " << av_version_info()
-       << " (libavformat: " << LIBAVFORMAT_VERSION_MAJOR << "." << LIBAVFORMAT_VERSION_MINOR
-       << ", libavcodec: " << LIBAVCODEC_VERSION_MAJOR << "." << LIBAVCODEC_VERSION_MINOR
-       << ", libavutil: " << LIBAVUTIL_VERSION_MAJOR << "." << LIBAVUTIL_VERSION_MINOR << ")";
-    return ss.str();
+int probe_interrupt_cb(void* opaque) noexcept {
+    if (!opaque) {
+        return 0;
+    }
+    const auto* cancel = static_cast<const std::atomic<bool>*>(opaque);
+    return cancel->load(std::memory_order_acquire) ? 1 : 0;
 }
 
-ProbeResult FFmpegProbe::probe(const std::filesystem::path& file_path) {
+std::string path_to_utf8(const std::filesystem::path& path) {
+    const auto u8 = path.u8string();
+    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+}
+
+ProbeResult probe_internal(const std::filesystem::path& logical_path,
+                           const CustomProbeIo* custom_io,
+                           std::shared_ptr<std::atomic<bool>> cancel_state,
+                           uint64_t known_file_size) {
     ProbeResult result;
 
-    if (!std::filesystem::exists(file_path)) {
-        result.success = false;
-        result.error_message = "File does not exist: " + file_path.string();
+    // Declare cancel_state BEFORE FFmpeg guards so it strictly outlives avformat_close_input().
+    std::shared_ptr<std::atomic<bool>> state =
+        cancel_state ? std::move(cancel_state) : std::make_shared<std::atomic<bool>>(false);
+
+    if (state->load(std::memory_order_acquire)) {
+        result.cancelled = true;
+        result.error_message = "Probe cancelled";
         return result;
     }
 
-    AVFormatContext* fmt_ctx = nullptr;
-    std::string path_str = file_path.string();
-
-    int err = avformat_open_input(&fmt_ctx, path_str.c_str(), nullptr, nullptr);
-    if (err < 0) {
-        char err_buf[AV_ERROR_MAX_STRING_SIZE] = {0};
-        av_strerror(err, err_buf, sizeof(err_buf));
-        result.success = false;
-        result.error_message = "Failed to open input: " + std::string(err_buf);
-        return result;
-    }
-
-    // RAII guard for format context
-    struct FormatGuard {
-        AVFormatContext* ctx;
-        ~FormatGuard() {
-            if (ctx) avformat_close_input(&ctx);
+    struct AvioGuard {
+        AVIOContext* io{nullptr};
+        ~AvioGuard() {
+            if (io) {
+                av_freep(&io->buffer);
+                avio_context_free(&io);
+            }
         }
-    } guard{fmt_ctx};
+    } avio_guard;
+
+    struct FormatGuard {
+        AVFormatContext* ctx{nullptr};
+        ~FormatGuard() {
+            if (ctx) {
+                avformat_close_input(&ctx);
+            }
+        }
+    } fmt_guard;
+
+    AVFormatContext* fmt_ctx = avformat_alloc_context();
+    if (!fmt_ctx) {
+        result.error_message = "Failed to allocate AVFormatContext";
+        return result;
+    }
+
+    fmt_ctx->interrupt_callback.callback = &probe_interrupt_cb;
+    fmt_ctx->interrupt_callback.opaque = state.get();
+
+    const std::string path_utf8 = path_to_utf8(logical_path);
+    const char* open_url = path_utf8.c_str();
+
+    if (custom_io != nullptr) {
+        if (!custom_io->read_packet) {
+            avformat_free_context(fmt_ctx);
+            result.error_message = "Custom probe I/O read_packet callback is null";
+            return result;
+        }
+        constexpr int kCustomIoBufferSize = 4096;
+        auto* io_buffer = static_cast<unsigned char*>(av_malloc(kCustomIoBufferSize));
+        if (!io_buffer) {
+            avformat_free_context(fmt_ctx);
+            result.error_message = "Failed to allocate custom AVIO buffer";
+            return result;
+        }
+        AVIOContext* avio_ctx = avio_alloc_context(
+            io_buffer,
+            kCustomIoBufferSize,
+            0,
+            custom_io->opaque,
+            custom_io->read_packet,
+            nullptr,
+            custom_io->seek);
+        if (!avio_ctx) {
+            av_free(io_buffer);
+            avformat_free_context(fmt_ctx);
+            result.error_message = "Failed to allocate custom AVIOContext";
+            return result;
+        }
+        avio_guard.io = avio_ctx;
+        fmt_ctx->pb = avio_ctx;
+        fmt_ctx->flags |= AVFMT_FLAG_CUSTOM_IO;
+        open_url = nullptr;
+    }
+
+    int err = avformat_open_input(&fmt_ctx, open_url, nullptr, nullptr);
+    if (err < 0) {
+        if (fmt_ctx) {
+            avformat_free_context(fmt_ctx);
+            fmt_ctx = nullptr;
+        }
+        if (err == AVERROR_EXIT || state->load(std::memory_order_acquire)) {
+            result.cancelled = true;
+            result.error_message = "Probe cancelled during input open";
+        } else {
+            char err_buf[AV_ERROR_MAX_STRING_SIZE] = {0};
+            av_strerror(err, err_buf, sizeof(err_buf));
+            result.error_message = "Failed to open input: " + std::string(err_buf);
+        }
+        return result;
+    }
+
+    fmt_guard.ctx = fmt_ctx;
 
     err = avformat_find_stream_info(fmt_ctx, nullptr);
-    if (err < 0) {
-        char err_buf[AV_ERROR_MAX_STRING_SIZE] = {0};
-        av_strerror(err, err_buf, sizeof(err_buf));
-        result.success = false;
-        result.error_message = "Failed to find stream info: " + std::string(err_buf);
+    if (err < 0 || state->load(std::memory_order_acquire)) {
+        if (err == AVERROR_EXIT || state->load(std::memory_order_acquire)) {
+            result.cancelled = true;
+            result.error_message = "Probe cancelled while reading stream info";
+        } else {
+            char err_buf[AV_ERROR_MAX_STRING_SIZE] = {0};
+            av_strerror(err, err_buf, sizeof(err_buf));
+            result.error_message = "Failed to find stream info: " + std::string(err_buf);
+        }
         return result;
     }
 
-    std::string container_format = fmt_ctx->iformat && fmt_ctx->iformat->name ? fmt_ctx->iformat->name : "unknown";
-    uint64_t file_size = 0;
-    try {
-        file_size = std::filesystem::file_size(file_path);
-    } catch (...) {}
+    std::string container_format =
+        (fmt_ctx->iformat && fmt_ctx->iformat->name) ? fmt_ctx->iformat->name : "unknown";
 
     Rational overall_duration{0, 1};
     if (fmt_ctx->duration != AV_NOPTS_VALUE && fmt_ctx->duration > 0) {
@@ -75,6 +152,12 @@ ProbeResult FFmpegProbe::probe(const std::filesystem::path& file_path) {
     streams.reserve(fmt_ctx->nb_streams);
 
     for (unsigned int i = 0; i < fmt_ctx->nb_streams; ++i) {
+        if (state->load(std::memory_order_acquire)) {
+            result.cancelled = true;
+            result.error_message = "Probe cancelled";
+            return result;
+        }
+
         AVStream* st = fmt_ctx->streams[i];
         AVCodecParameters* par = st->codecpar;
 
@@ -96,7 +179,6 @@ ProbeResult FFmpegProbe::probe(const std::filesystem::path& file_path) {
         if (st->duration != AV_NOPTS_VALUE && st->duration > 0) {
             duration_ticks = st->duration;
         } else if (overall_duration.numerator() > 0) {
-            // Compute ticks from overall duration
             duration_ticks = (overall_duration / timebase).numerator();
         }
 
@@ -160,17 +242,60 @@ ProbeResult FFmpegProbe::probe(const std::filesystem::path& file_path) {
     }
 
     std::string asset_id = UUID::generate();
-    std::string display_name = file_path.filename().string();
+    std::string display_name = path_to_utf8(logical_path.filename());
 
     result.asset = MediaAsset(std::move(asset_id),
-                              file_path,
+                              logical_path,
                               std::move(display_name),
-                              file_size,
+                              known_file_size,
                               std::move(container_format),
                               overall_duration,
                               std::move(streams));
     result.success = true;
     return result;
+}
+
+} // namespace
+
+std::string FFmpegProbe::ffmpeg_version_info() {
+    std::ostringstream ss;
+    ss << "FFmpeg " << av_version_info()
+       << " (libavformat: " << LIBAVFORMAT_VERSION_MAJOR << "." << LIBAVFORMAT_VERSION_MINOR
+       << ", libavcodec: " << LIBAVCODEC_VERSION_MAJOR << "." << LIBAVCODEC_VERSION_MINOR
+       << ", libavutil: " << LIBAVUTIL_VERSION_MAJOR << "." << LIBAVUTIL_VERSION_MINOR << ")";
+    return ss.str();
+}
+
+ProbeResult FFmpegProbe::probe(const std::filesystem::path& file_path,
+                               std::shared_ptr<std::atomic<bool>> cancel_state) {
+    if (cancel_state && cancel_state->load(std::memory_order_acquire)) {
+        ProbeResult result;
+        result.cancelled = true;
+        result.error_message = "Probe cancelled";
+        return result;
+    }
+
+    std::error_code ec;
+    if (!std::filesystem::exists(file_path, ec)) {
+        ProbeResult result;
+        result.success = false;
+        result.error_message = "File does not exist: " + path_to_utf8(file_path);
+        return result;
+    }
+
+    uint64_t file_size = 0;
+    const auto sz = std::filesystem::file_size(file_path, ec);
+    if (!ec) {
+        file_size = sz;
+    }
+
+    return probe_internal(file_path, nullptr, std::move(cancel_state), file_size);
+}
+
+ProbeResult FFmpegProbe::probe_custom_io(const CustomProbeIo& custom_io,
+                                         const std::filesystem::path& logical_path,
+                                         std::shared_ptr<std::atomic<bool>> cancel_state) {
+    return probe_internal(logical_path, &custom_io, std::move(cancel_state), 0);
 }
 
 } // namespace ave

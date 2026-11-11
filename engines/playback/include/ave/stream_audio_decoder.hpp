@@ -3,6 +3,7 @@
 #include "ave/time.hpp"
 #include "ave/audio_buffer.hpp"
 
+#include <atomic>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -18,7 +19,7 @@ namespace ave {
 
 /**
  * @brief Thread-safe (per instance) FFmpeg audio stream decoder with sample-accurate
- * seeking and resampling to interleaved 32-bit float PCM at target sample rate and channel layout.
+ * seeking, resampling to interleaved 32-bit float PCM, and cooperative AVIOInterruptCB cancellation.
  */
 class StreamAudioDecoder {
 public:
@@ -36,7 +37,18 @@ public:
      */
     bool open(const std::filesystem::path& file_path,
               uint32_t target_sample_rate = 48000,
-              int target_channels = 2);
+              int target_channels = 2,
+              std::shared_ptr<std::atomic<bool>> cancel_state = nullptr);
+
+    /**
+     * @brief Requests cooperative cancellation of blocking FFmpeg operations.
+     */
+    void request_cancel() noexcept;
+
+    /**
+     * @brief Returns true if cancellation has been requested for the active session.
+     */
+    [[nodiscard]] bool is_cancelled() const noexcept;
 
     /**
      * @brief Closes decoder and releases all FFmpeg resources.
@@ -63,6 +75,7 @@ public:
 
 private:
     std::filesystem::path file_path_{};
+    std::shared_ptr<std::atomic<bool>> cancel_state_{};
     AVFormatContext* format_ctx_{nullptr};
     AVCodecContext* codec_ctx_{nullptr};
     AVFrame* raw_frame_{nullptr};

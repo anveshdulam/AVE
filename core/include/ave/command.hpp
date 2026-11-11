@@ -308,15 +308,26 @@ public:
     void mark_clean() noexcept;
 
     using ChangeListener = std::function<void()>;
+    using ListenerId = uint64_t;
     void add_change_listener(ChangeListener listener);
+    ListenerId add_change_listener_with_id(ChangeListener listener);
+    void remove_change_listener(ListenerId id);
+
+    [[nodiscard]] uint64_t mutation_revision() const noexcept { return mutation_revision_; }
 
 private:
+    struct ListenerEntry {
+        ListenerId id{0};
+        ChangeListener callback;
+    };
+
     std::vector<std::unique_ptr<Command>> undo_stack_{};
     std::vector<std::unique_ptr<Command>> redo_stack_{};
     size_t max_history_{100};
     int64_t current_index_{0};
     int64_t clean_index_{0};
-    std::vector<ChangeListener> listeners_{};
+    uint64_t mutation_revision_{0};
+    std::vector<ListenerEntry> listeners_{};
 
     void notify_listeners();
 };

@@ -12,6 +12,16 @@ Rectangle {
     property string timecode: "01:00:14:18"
     property real playheadRatio: 0.28
 
+    readonly property bool hasLiveService: (typeof playbackService !== "undefined" && playbackService !== null)
+    readonly property bool hasTimelineDuration: hasLiveService && playbackService.durationSeconds > 0.0
+    readonly property bool effectivePlaying: hasLiveService ? playbackService.isPlaying : root.isPlaying
+    readonly property string effectiveTimecode: hasLiveService ? playbackService.timecode : root.timecode
+    readonly property real effectivePlayheadRatio: hasLiveService
+                                                   ? (playbackService.durationSeconds > 0.0
+                                                      ? Math.min(1.0, Math.max(0.0, playbackService.playheadPosition / playbackService.durationSeconds))
+                                                      : 0.0)
+                                                   : root.playheadRatio
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -42,12 +52,18 @@ Rectangle {
                     width: 7
                     height: 7
                     radius: 3.5
-                    color: "#10b981"
+                    color: (root.hasLiveService && !playbackService.hasGpuAcceleration) ? "#f59e0b" : "#10b981"
                 }
 
                 Text {
-                    text: "Vulkan Compositor Active | 1920x1080 @ 23.98 fps"
-                    color: "#10b981"
+                    text: root.hasLiveService
+                          ? ((playbackService.hasGpuAcceleration
+                              ? (playbackService.gpuDeviceName + " | Vulkan Compositor ")
+                              : "CPU Reference Compositor ")
+                             + (playbackService.compositingEnabled ? "Active" : "Bypassed")
+                             + " | " + Number(playbackService.fps).toFixed(2) + " fps")
+                          : "Vulkan Compositor Active | 1920x1080 @ 23.98 fps"
+                    color: (root.hasLiveService && !playbackService.hasGpuAcceleration) ? "#f59e0b" : "#10b981"
                     font.bold: true
                     font.pixelSize: 10
                 }
@@ -73,13 +89,25 @@ Rectangle {
                     border.color: "#33333e"
                     border.width: 1
 
-                    // Simulated Video Frame Content
+                    // Backdrop & Live Async Vulkan Readback Frame
                     Rectangle {
                         anchors.fill: parent
                         gradient: Gradient {
                             GradientStop { position: 0.0; color: "#0f172a" }
                             GradientStop { position: 0.5; color: "#1e1b4b" }
                             GradientStop { position: 1.0; color: "#090d16" }
+                        }
+
+                        Image {
+                            id: liveFrameImage
+                            anchors.fill: parent
+                            asynchronous: true
+                            cache: false
+                            retainWhileLoading: true
+                            fillMode: Image.PreserveAspectFit
+                            source: (root.hasLiveService && playbackService.currentFrameSeq > 0)
+                                    ? ("image://aveframe/" + playbackService.currentFrameSeq)
+                                    : ""
                         }
 
                         // Safe Action Guide (90%)
@@ -120,20 +148,36 @@ Rectangle {
                             opacity: 0.3
                         }
 
-                        // Center Text
+                        // Center Text (shown only before first live frame becomes Ready)
                         ColumnLayout {
                             anchors.centerIn: parent
                             spacing: 4
+                            visible: liveFrameImage.status !== Image.Ready
 
                             Text {
-                                text: "AVE REAL-TIME VULKAN ENGINE"
+                                text: !root.hasLiveService
+                                      ? qsTr("AVE VIDEO MONITOR (STANDBY)")
+                                      : (playbackService.hasGpuAcceleration
+                                         ? qsTr("AVE VULKAN PREVIEW (%1)").arg(playbackService.compositingEnabled ? qsTr("READY") : qsTr("BYPASSED"))
+                                         : qsTr("AVE CPU REFERENCE PREVIEW (%1)").arg(playbackService.compositingEnabled ? qsTr("READY") : qsTr("BYPASSED")))
                                 color: "#f8fafc"
                                 font.bold: true
                                 font.pixelSize: 13
                                 Layout.alignment: Qt.AlignHCenter
                             }
                             Text {
-                                text: "Hardware Staging & Compute Shaders Active"
+                                text: !root.hasLiveService
+                                      ? qsTr("Playback service offline")
+                                      : (playbackService.durationSeconds <= 0.0
+                                         ? qsTr("Import media and place a clip on the timeline, or press Play")
+                                         : (playbackService.hasGpuAcceleration
+                                            ? (playbackService.gpuDeviceName
+                                               + (playbackService.compositingEnabled
+                                                  ? qsTr(" | Press Play or Scrub to preview")
+                                                  : qsTr(" | Compositing bypassed — press Play or Scrub")))
+                                            : (playbackService.compositingEnabled
+                                               ? qsTr("CPU Reference Compositor | Press Play or Scrub to preview")
+                                               : qsTr("CPU Reference Compositor | Compositing bypassed"))))
                                 color: "#94a3b8"
                                 font.pixelSize: 11
                                 Layout.alignment: Qt.AlignHCenter
@@ -154,7 +198,7 @@ Rectangle {
 
                             Text {
                                 anchors.centerIn: parent
-                                text: root.timecode
+                                text: root.effectiveTimecode
                                 color: "#60a5fa"
                                 font.family: "Consolas, monospace"
                                 font.bold: true
@@ -183,8 +227,13 @@ Rectangle {
                 // Mark In Button
                 Button {
                     text: "{"
-                    ToolTip.visible: hovered
-                    ToolTip.text: "Mark In (I)"
+                    enabled: false
+                    HoverHandler {
+                        id: markInHover
+                    }
+                    ToolTip.visible: markInHover.hovered
+                    ToolTip.delay: 300
+                    ToolTip.text: qsTr("Mark In (I) — Deferred post-Phase 10")
                     Layout.preferredWidth: 28
                     Layout.preferredHeight: 24
                 }
@@ -196,17 +245,28 @@ Rectangle {
                     ToolTip.text: "Step -1 Frame (Left Arrow)"
                     Layout.preferredWidth: 32
                     Layout.preferredHeight: 24
+                    onClicked: {
+                        if (root.hasLiveService) {
+                            playbackService.stepBackward(1)
+                        }
+                    }
                 }
 
                 // Play / Pause Button
                 Button {
-                    text: root.isPlaying ? "⏸" : "▶"
+                    text: root.effectivePlaying ? "⏸" : "▶"
                     highlighted: true
                     ToolTip.visible: hovered
-                    ToolTip.text: root.isPlaying ? "Pause (Space)" : "Play (Space)"
+                    ToolTip.text: root.effectivePlaying ? "Pause (Space)" : "Play (Space)"
                     Layout.preferredWidth: 40
                     Layout.preferredHeight: 26
-                    onClicked: root.isPlaying = !root.isPlaying
+                    onClicked: {
+                        if (root.hasLiveService) {
+                            playbackService.togglePlay()
+                        } else {
+                            root.isPlaying = !root.isPlaying
+                        }
+                    }
                 }
 
                 // Step Next Frame
@@ -216,29 +276,54 @@ Rectangle {
                     ToolTip.text: "Step +1 Frame (Right Arrow)"
                     Layout.preferredWidth: 32
                     Layout.preferredHeight: 24
+                    onClicked: {
+                        if (root.hasLiveService) {
+                            playbackService.stepForward(1)
+                        }
+                    }
                 }
 
                 // Mark Out Button
                 Button {
                     text: "}"
-                    ToolTip.visible: hovered
-                    ToolTip.text: "Mark Out (O)"
+                    enabled: false
+                    HoverHandler {
+                        id: markOutHover
+                    }
+                    ToolTip.visible: markOutHover.hovered
+                    ToolTip.delay: 300
+                    ToolTip.text: qsTr("Mark Out (O) — Deferred post-Phase 10")
                     Layout.preferredWidth: 28
                     Layout.preferredHeight: 24
                 }
 
                 // Mini Scrubber Slider
                 Slider {
+                    id: scrubberSlider
                     Layout.fillWidth: true
+                    enabled: !root.hasLiveService || root.hasTimelineDuration
                     from: 0.0
                     to: 1.0
-                    value: root.playheadRatio
-                    onMoved: root.playheadRatio = value
+                    Binding {
+                        target: scrubberSlider
+                        property: "value"
+                        value: root.effectivePlayheadRatio
+                        when: !scrubberSlider.pressed
+                    }
+                    onMoved: {
+                        if (root.hasLiveService) {
+                            if (playbackService.durationSeconds > 0.0) {
+                                playbackService.seekSeconds(value * playbackService.durationSeconds)
+                            }
+                        } else {
+                            root.playheadRatio = value
+                        }
+                    }
                 }
 
                 // Timecode
                 Text {
-                    text: root.timecode
+                    text: root.effectiveTimecode
                     color: "#38bdf8"
                     font.family: "Consolas, monospace"
                     font.bold: true
@@ -248,3 +333,4 @@ Rectangle {
         }
     }
 }
+

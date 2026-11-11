@@ -8,25 +8,24 @@ Rectangle {
     border.color: "#282830"
     border.width: 1
 
-    property real leftLevelDb: -14.2
-    property real rightLevelDb: -15.8
-    property real peakHoldDb: -9.4
+    readonly property bool hasLiveService: (typeof playbackService !== "undefined" && playbackService !== null)
+    readonly property real leftLevelDb: hasLiveService ? playbackService.leftLevelDb : -60.0
+    readonly property real rightLevelDb: hasLiveService ? playbackService.rightLevelDb : -60.0
+    readonly property real masterLevelDb: Math.max(leftLevelDb, rightLevelDb)
 
-    // Dynamic Meter Pulse Animation (Simulating Playback Audio Engine)
-    Timer {
-        interval: 100
-        running: true
-        repeat: true
-        onTriggered: {
-            // Natural random fluctuations around -14 dB
-            root.leftLevelDb = -12.0 - Math.random() * 8.0
-            root.rightLevelDb = -13.0 - Math.random() * 8.0
-        }
+    HoverHandler {
+        id: meterHover
     }
+
+    ToolTip.visible: meterHover.hovered
+    ToolTip.delay: 300
+    ToolTip.text: root.hasLiveService
+                  ? playbackService.audioOutputStatus
+                  : qsTr("No live audio service connected")
 
     function dbToHeightRatio(db) {
         // Range: -60 dB (0.0) to 0 dB (1.0)
-        if (db <= -60.0) return 0.0
+        if (!isFinite(db) || db <= -60.0) return 0.0
         if (db >= 0.0) return 1.0
         return (db + 60.0) / 60.0
     }
@@ -39,8 +38,8 @@ Rectangle {
         // Top Readout
         Text {
             Layout.alignment: Qt.AlignHCenter
-            text: root.leftLevelDb.toFixed(1) + " dB"
-            color: root.leftLevelDb > -3.0 ? "#ef4444" : "#34d399"
+            text: root.masterLevelDb.toFixed(1) + " dB"
+            color: root.masterLevelDb > -3.0 ? "#ef4444" : "#34d399"
             font.family: "Consolas, monospace"
             font.bold: true
             font.pixelSize: 9
@@ -123,3 +122,4 @@ Rectangle {
         }
     }
 }
+

@@ -5,10 +5,14 @@ set(AVE_RENDER_SOURCES
     src/render_node.cpp
     src/render_nodes.cpp
     src/render_graph.cpp
+    src/video_frame_packet.cpp
+    src/frame_presentation_hub.cpp
     include/ave/render_types.hpp
     include/ave/render_node.hpp
     include/ave/render_nodes.hpp
     include/ave/render_graph.hpp
+    include/ave/video_frame_packet.hpp
+    include/ave/frame_presentation_hub.hpp
 )
 
 if(TARGET Vulkan::Vulkan OR Vulkan_FOUND)
@@ -16,9 +20,11 @@ if(TARGET Vulkan::Vulkan OR Vulkan_FOUND)
         src/vulkan_device.cpp
         src/vulkan_texture.cpp
         src/vulkan_compositor.cpp
+        src/vulkan_readback_ring.cpp
         include/ave/vulkan_device.hpp
         include/ave/vulkan_texture.hpp
         include/ave/vulkan_compositor.hpp
+        include/ave/vulkan_readback_ring.hpp
         include/ave/compositor_comp_spv.hpp
     )
 endif()

@@ -9,6 +9,23 @@ namespace ave {
 
 namespace {
 
+std::string escape_otio_json(const std::string& str) {
+    std::ostringstream ss;
+    for (char c : str) {
+        switch (c) {
+            case '"': ss << "\\\""; break;
+            case '\\': ss << "\\\\"; break;
+            case '\b': ss << "\\b"; break;
+            case '\f': ss << "\\f"; break;
+            case '\n': ss << "\\n"; break;
+            case '\r': ss << "\\r"; break;
+            case '\t': ss << "\\t"; break;
+            default: ss << c; break;
+        }
+    }
+    return ss.str();
+}
+
 std::string otio_extract_string(const std::string& json, const std::string& key) {
     std::string needle = "\"" + key + "\":";
     size_t pos = json.find(needle);
@@ -74,7 +91,7 @@ std::string OtioInterchange::export_to_json(const Timeline& timeline,
 
     ss << "{\n";
     ss << "  \"OTIO_SCHEMA\": \"Timeline.1\",\n";
-    ss << "  \"name\": \"" << timeline.name() << "\",\n";
+    ss << "  \"name\": \"" << escape_otio_json(timeline.name()) << "\",\n";
     ss << "  \"global_start_time\": {\n";
     ss << "    \"OTIO_SCHEMA\": \"RationalTime.1\",\n";
     ss << "    \"rate\": " << fps << ",\n";
@@ -89,7 +106,7 @@ std::string OtioInterchange::export_to_json(const Timeline& timeline,
             const auto& trk = tracks[t_i];
             ss << "      {\n";
             ss << "        \"OTIO_SCHEMA\": \"Track.1\",\n";
-            ss << "        \"name\": \"" << trk.name() << "\",\n";
+            ss << "        \"name\": \"" << escape_otio_json(trk.name()) << "\",\n";
             ss << "        \"kind\": \"" << kind_str << "\",\n";
             ss << "        \"children\": [\n";
 
@@ -132,7 +149,7 @@ std::string OtioInterchange::export_to_json(const Timeline& timeline,
 
                 ss << "          {\n";
                 ss << "            \"OTIO_SCHEMA\": \"Clip.1\",\n";
-                ss << "            \"name\": \"" << it.name() << "\",\n";
+                ss << "            \"name\": \"" << escape_otio_json(it.name()) << "\",\n";
                 ss << "            \"source_range\": {\n";
                 ss << "              \"OTIO_SCHEMA\": \"TimeRange.1\",\n";
                 ss << "              \"start_time\": {\"OTIO_SCHEMA\": \"RationalTime.1\", \"rate\": " << fps << ", \"value\": " << clip_src_in << "},\n";
@@ -140,19 +157,19 @@ std::string OtioInterchange::export_to_json(const Timeline& timeline,
                 ss << "            },\n";
                 ss << "            \"media_reference\": {\n";
                 ss << "              \"OTIO_SCHEMA\": \"ExternalReference.1\",\n";
-                ss << "              \"target_url\": \"" << target_url << "\"\n";
+                ss << "              \"target_url\": \"" << escape_otio_json(target_url) << "\"\n";
                 ss << "            },\n";
                 ss << "            \"metadata\": {\n";
                 ss << "              \"ave\": {\n";
-                ss << "                \"asset_id\": \"" << it.asset_id() << "\",\n";
-                ss << "                \"clip_id\": \"" << it.clip_id() << "\",\n";
+                ss << "                \"asset_id\": \"" << escape_otio_json(it.asset_id()) << "\",\n";
+                ss << "                \"clip_id\": \"" << escape_otio_json(it.clip_id()) << "\",\n";
                 ss << "                \"transform_x\": " << it.transform_x() << ",\n";
                 ss << "                \"transform_y\": " << it.transform_y() << ",\n";
                 ss << "                \"scale_x\": " << it.scale_x() << ",\n";
                 ss << "                \"scale_y\": " << it.scale_y() << ",\n";
                 ss << "                \"rotation\": " << it.rotation() << ",\n";
                 ss << "                \"opacity\": " << it.opacity() << ",\n";
-                ss << "                \"blend_mode\": \"" << it.blend_mode() << "\"\n";
+                ss << "                \"blend_mode\": \"" << escape_otio_json(it.blend_mode()) << "\"\n";
                 ss << "              }\n";
                 ss << "            }\n";
                 ss << "          }" << (i + 1 < items.size() ? "," : "") << "\n";

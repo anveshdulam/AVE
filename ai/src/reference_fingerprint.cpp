@@ -2,14 +2,74 @@
 #include <ave/timeline.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <iomanip>
+#include <limits>
 #include <numeric>
 #include <sstream>
 
 namespace ave {
 
 namespace {
+
+bool is_finite_fingerprint(const ReferenceFingerprint& fp) noexcept {
+    return std::isfinite(fp.pacing.median_sec) &&
+           std::isfinite(fp.pacing.p25_sec) &&
+           std::isfinite(fp.pacing.p75_sec) &&
+           std::isfinite(fp.pacing.iqr_sec) &&
+           std::isfinite(fp.pacing.burstiness) &&
+           std::isfinite(fp.rhythm.beat_sync_ratio) &&
+           std::isfinite(fp.rhythm.downbeat_sync_ratio) &&
+           std::isfinite(fp.rhythm.offbeat_ratio) &&
+           std::isfinite(fp.rhythm.mean_offset_ms) &&
+           std::isfinite(fp.transitions.hard_cut_ratio) &&
+           std::isfinite(fp.transitions.dissolve_ratio) &&
+           std::isfinite(fp.transitions.fade_ratio) &&
+           std::isfinite(fp.motion.mean_motion_energy) &&
+           std::isfinite(fp.motion.motion_variance) &&
+           std::isfinite(fp.color.lab_l) &&
+           std::isfinite(fp.color.lab_a) &&
+           std::isfinite(fp.color.lab_b) &&
+           std::isfinite(fp.color.contrast) &&
+           std::isfinite(fp.integrated_loudness_lufs) &&
+           std::isfinite(fp.tempo_bpm) &&
+           std::isfinite(fp.speech_density);
+}
+
+bool are_valid_weights(const FingerprintDistanceWeights& w) noexcept {
+    if (!std::isfinite(w.pacing_weight) || w.pacing_weight < 0.0 ||
+        !std::isfinite(w.rhythm_weight) || w.rhythm_weight < 0.0 ||
+        !std::isfinite(w.transition_weight) || w.transition_weight < 0.0 ||
+        !std::isfinite(w.motion_weight) || w.motion_weight < 0.0 ||
+        !std::isfinite(w.color_weight) || w.color_weight < 0.0) {
+        return false;
+    }
+    const double sum = w.pacing_weight + w.rhythm_weight +
+                       w.transition_weight + w.motion_weight + w.color_weight;
+    return std::isfinite(sum) && sum > 1e-9;
+}
+
+FingerprintDistanceBreakdown make_invalid_breakdown() noexcept {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    FingerprintDistanceBreakdown bd;
+    bd.valid = false;
+    bd.total_distance = nan;
+    bd.pacing_dist = nan;
+    bd.rhythm_dist = nan;
+    bd.transition_dist = nan;
+    bd.motion_dist = nan;
+    bd.color_dist = nan;
+    return bd;
+}
+
+double finite_clamp_unit(double value, bool& ok) noexcept {
+    if (!std::isfinite(value)) {
+        ok = false;
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    return (std::min)(1.0, (std::max)(0.0, value));
+}
 
 double compute_percentile(const std::vector<double>& sorted_vals, double p) {
     if (sorted_vals.empty()) return 0.0;
@@ -28,13 +88,22 @@ ShotLengthDistribution calculate_pacing(const std::vector<double>& durations) {
     ShotLengthDistribution dist;
     if (durations.empty()) return dist;
 
-    std::vector<double> sorted = durations;
+    std::vector<double> sorted;
+    sorted.reserve(durations.size());
+    for (double val : durations) {
+        if (!std::isfinite(val)) {
+            dist.median_sec = std::numeric_limits<double>::quiet_NaN();
+            return dist;
+        }
+        sorted.push_back(val);
+    }
     std::sort(sorted.begin(), sorted.end());
 
     dist.median_sec = compute_percentile(sorted, 0.50);
     dist.p25_sec = compute_percentile(sorted, 0.25);
     dist.p75_sec = compute_percentile(sorted, 0.75);
-    dist.iqr_sec = (std::max)(0.0, dist.p75_sec - dist.p25_sec);
+    const double raw_iqr = dist.p75_sec - dist.p25_sec;
+    dist.iqr_sec = std::isfinite(raw_iqr) ? (std::max)(0.0, raw_iqr) : std::numeric_limits<double>::quiet_NaN();
 
     // Mean and Standard Deviation
     double sum = std::accumulate(sorted.begin(), sorted.end(), 0.0);
@@ -48,9 +117,12 @@ ShotLengthDistribution calculate_pacing(const std::vector<double>& durations) {
     double stddev = std::sqrt(sq_diff_sum / static_cast<double>(sorted.size()));
 
     // Burstiness B = (sigma - mu) / (sigma + mu) in [-1.0, 1.0]
-    if (stddev + mean > 1e-6) {
-        dist.burstiness = (stddev - mean) / (stddev + mean);
-        dist.burstiness = (std::max)(-1.0, (std::min)(1.0, dist.burstiness));
+    const double denom = stddev + mean;
+    if (std::isfinite(denom) && denom > 1e-6) {
+        const double raw_burst = (stddev - mean) / denom;
+        dist.burstiness = std::isfinite(raw_burst)
+            ? (std::max)(-1.0, (std::min)(1.0, raw_burst))
+            : std::numeric_limits<double>::quiet_NaN();
     }
 
     return dist;
@@ -165,12 +237,15 @@ ReferenceFingerprint FingerprintEngine::from_perception_report(const PerceptionR
     fp.tempo_bpm = report.rhythm.primary_tempo_bpm;
 
     // Speech density
-    if (report.duration.to_seconds() > 0.0) {
+    const double rep_dur_sec = report.duration.to_seconds();
+    if (std::isfinite(rep_dur_sec) && rep_dur_sec > 0.0) {
         double speech_sec = 0.0;
         for (const auto& seg : report.speech.segments) {
             speech_sec += (seg.end_pts - seg.start_pts).to_seconds();
         }
-        fp.speech_density = (std::min)(1.0, speech_sec / report.duration.to_seconds());
+        if (std::isfinite(speech_sec) && speech_sec >= 0.0) {
+            fp.speech_density = (std::min)(1.0, speech_sec / rep_dur_sec);
+        }
     }
 
     return fp;
@@ -217,51 +292,67 @@ FingerprintDistanceBreakdown FingerprintEngine::compute_distance_detailed(
     const ReferenceFingerprint& b,
     FingerprintDistanceWeights weights
 ) {
+    // Reject non-finite inputs and negative/zero weights before any min/max clamp
+    // (std::min(1.0, NaN) == 1.0 and std::max(0.0, NaN) == 0.0 would mask corrupt features).
+    if (!is_finite_fingerprint(a) || !is_finite_fingerprint(b) || !are_valid_weights(weights)) {
+        return make_invalid_breakdown();
+    }
+
+    bool ok = true;
     FingerprintDistanceBreakdown bd;
 
     // 1. Pacing distance
-    double med_max = (std::max)({a.pacing.median_sec, b.pacing.median_sec, 0.1});
-    double iqr_max = (std::max)({a.pacing.iqr_sec, b.pacing.iqr_sec, 0.1});
-    double d_med = std::abs(a.pacing.median_sec - b.pacing.median_sec) / med_max;
-    double d_iqr = std::abs(a.pacing.iqr_sec - b.pacing.iqr_sec) / iqr_max;
-    double d_burst = std::abs(a.pacing.burstiness - b.pacing.burstiness) / 2.0;
-    bd.pacing_dist = (std::min)(1.0, 0.5 * d_med + 0.3 * d_iqr + 0.2 * d_burst);
+    const double med_max = (std::max)({a.pacing.median_sec, b.pacing.median_sec, 0.1});
+    const double iqr_max = (std::max)({a.pacing.iqr_sec, b.pacing.iqr_sec, 0.1});
+    const double d_med = std::abs(a.pacing.median_sec - b.pacing.median_sec) / med_max;
+    const double d_iqr = std::abs(a.pacing.iqr_sec - b.pacing.iqr_sec) / iqr_max;
+    const double d_burst = std::abs(a.pacing.burstiness - b.pacing.burstiness) / 2.0;
+    bd.pacing_dist = finite_clamp_unit(0.5 * d_med + 0.3 * d_iqr + 0.2 * d_burst, ok);
 
     // 2. Rhythm / Beat-sync distance
-    double d_sync = std::abs(a.rhythm.beat_sync_ratio - b.rhythm.beat_sync_ratio);
-    double d_down = std::abs(a.rhythm.downbeat_sync_ratio - b.rhythm.downbeat_sync_ratio);
-    double d_off = (std::min)(1.0, std::abs(a.rhythm.mean_offset_ms - b.rhythm.mean_offset_ms) / 70.0);
-    bd.rhythm_dist = (std::min)(1.0, 0.5 * d_sync + 0.3 * d_down + 0.2 * d_off);
+    const double d_sync = std::abs(a.rhythm.beat_sync_ratio - b.rhythm.beat_sync_ratio);
+    const double d_down = std::abs(a.rhythm.downbeat_sync_ratio - b.rhythm.downbeat_sync_ratio);
+    const double raw_off = std::abs(a.rhythm.mean_offset_ms - b.rhythm.mean_offset_ms) / 70.0;
+    const double d_off = finite_clamp_unit(raw_off, ok);
+    bd.rhythm_dist = finite_clamp_unit(0.5 * d_sync + 0.3 * d_down + 0.2 * d_off, ok);
 
     // 3. Transition mix distance (L1 norm / 2)
-    double d_h = std::abs(a.transitions.hard_cut_ratio - b.transitions.hard_cut_ratio);
-    double d_d = std::abs(a.transitions.dissolve_ratio - b.transitions.dissolve_ratio);
-    double d_f = std::abs(a.transitions.fade_ratio - b.transitions.fade_ratio);
-    bd.transition_dist = (std::min)(1.0, 0.5 * (d_h + d_d + d_f));
+    const double d_h = std::abs(a.transitions.hard_cut_ratio - b.transitions.hard_cut_ratio);
+    const double d_d = std::abs(a.transitions.dissolve_ratio - b.transitions.dissolve_ratio);
+    const double d_f = std::abs(a.transitions.fade_ratio - b.transitions.fade_ratio);
+    bd.transition_dist = finite_clamp_unit(0.5 * (d_h + d_d + d_f), ok);
 
     // 4. Motion distance
-    bd.motion_dist = (std::min)(1.0, std::abs(a.motion.mean_motion_energy - b.motion.mean_motion_energy) * 2.0);
+    bd.motion_dist = finite_clamp_unit(
+        std::abs(a.motion.mean_motion_energy - b.motion.mean_motion_energy) * 2.0, ok);
 
     // 5. Color look distance (Normalized Delta E)
-    double d_l = (a.color.lab_l - b.color.lab_l) / 100.0;
-    double d_a = (a.color.lab_a - b.color.lab_a) / 100.0;
-    double d_b = (a.color.lab_b - b.color.lab_b) / 100.0;
-    double delta_e = std::sqrt(d_l * d_l + d_a * d_a + d_b * d_b);
-    bd.color_dist = (std::min)(1.0, delta_e);
+    const double d_l = (a.color.lab_l - b.color.lab_l) / 100.0;
+    const double d_a = (a.color.lab_a - b.color.lab_a) / 100.0;
+    const double d_b = (a.color.lab_b - b.color.lab_b) / 100.0;
+    const double delta_e = std::sqrt(d_l * d_l + d_a * d_a + d_b * d_b);
+    bd.color_dist = finite_clamp_unit(delta_e, ok);
+
+    if (!ok) {
+        return make_invalid_breakdown();
+    }
 
     // Weighted sum
-    double total_weight = weights.pacing_weight + weights.rhythm_weight +
-                          weights.transition_weight + weights.motion_weight +
-                          weights.color_weight;
-    if (total_weight < 1e-6) total_weight = 1.0;
+    const double total_weight = weights.pacing_weight + weights.rhythm_weight +
+                                weights.transition_weight + weights.motion_weight +
+                                weights.color_weight;
+    const double weighted_sum = weights.pacing_weight * bd.pacing_dist +
+                                weights.rhythm_weight * bd.rhythm_dist +
+                                weights.transition_weight * bd.transition_dist +
+                                weights.motion_weight * bd.motion_dist +
+                                weights.color_weight * bd.color_dist;
 
-    double weighted_sum = weights.pacing_weight * bd.pacing_dist +
-                          weights.rhythm_weight * bd.rhythm_dist +
-                          weights.transition_weight * bd.transition_dist +
-                          weights.motion_weight * bd.motion_dist +
-                          weights.color_weight * bd.color_dist;
+    bd.total_distance = finite_clamp_unit(weighted_sum / total_weight, ok);
+    if (!ok) {
+        return make_invalid_breakdown();
+    }
 
-    bd.total_distance = (std::min)(1.0, (std::max)(0.0, weighted_sum / total_weight));
+    bd.valid = true;
     return bd;
 }
 

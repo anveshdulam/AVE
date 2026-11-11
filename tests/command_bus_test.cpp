@@ -249,6 +249,23 @@ int main() {
     history.undo(timeline, pool);
     ASSERT_FALSE(history.is_dirty());
 
+    // 8.1 Semantic mutation_revision ignores mark_clean() and listener add/remove with ID works
+    const uint64_t rev_before_clean = history.mutation_revision();
+    history.mark_clean();
+    ASSERT_EQ(history.mutation_revision(), rev_before_clean);
+
+    int scoped_listener_hits = 0;
+    const auto scoped_id = history.add_change_listener_with_id([&]() {
+        scoped_listener_hits++;
+    });
+    history.execute(std::make_unique<ave::SetTrackMuteCommand>(v1_id, true), timeline, pool);
+    ASSERT_EQ(history.mutation_revision(), rev_before_clean + 1);
+    ASSERT_EQ(scoped_listener_hits, 1);
+    history.remove_change_listener(scoped_id);
+    history.undo(timeline, pool);
+    ASSERT_EQ(history.mutation_revision(), rev_before_clean + 2);
+    ASSERT_EQ(scoped_listener_hits, 1);
+
     // 9. Test Listeners
     ASSERT_TRUE(listener_notifications > 10);
     std::cout << "  Total change notifications triggered: " << listener_notifications << std::endl;

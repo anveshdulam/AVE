@@ -1,6 +1,7 @@
 #include "ave/playback_clock.hpp"
 #include "ave/frame_queue.hpp"
 #include "ave/playback_controller.hpp"
+#include "ave/playback_snapshot.hpp"
 
 #include <iostream>
 #include <thread>
@@ -181,6 +182,85 @@ int main() {
         auto metrics = controller.metrics();
         ASSERT_EQ(metrics.frames_dropped, 2);  // Stale and late frames dropped
         ASSERT_EQ(metrics.frames_rendered, 1); // Sync frame rendered
+    }
+
+    // 6. PlaybackSnapshotStore Immutability, Monotonic Versioning & Stale Snapshot Rejection
+    {
+        ave::Timeline tl("tl-snap-unit", "Snapshot Unit", ave::Rational{24, 1}, 640, 360);
+        ave::MediaPool pool;
+        const std::string v1_id = tl.video_tracks()[0].id();
+
+        ave::MediaAsset a1("asset-1", "D:/media/clip_a.mp4", "clip_a.mp4", 1024, "mp4", ave::Rational{2, 1}, {});
+        pool.register_asset(a1);
+        tl.find_track_mut(v1_id)->add_item(ave::TimelineItem(
+            "item-1", "c1", "asset-1", "Clip A",
+            ave::Rational{0, 1}, ave::Rational{2, 1}, ave::Rational{0, 1}));
+
+        ave::PlaybackSnapshotStore store(tl, pool);
+        const ave::PlaybackSnapshotPtr snap1 = store.load();
+        ASSERT_TRUE(snap1 != nullptr);
+        ASSERT_EQ(snap1->version, 1u);
+        ASSERT_EQ(store.current_version(), 1u);
+        ASSERT_EQ(snap1->timeline.duration(), ave::Rational(2, 1));
+        ASSERT_TRUE(snap1->find_asset("asset-1") != nullptr);
+        ASSERT_EQ(snap1->find_asset("asset-1")->file_path(), std::filesystem::path("D:/media/clip_a.mp4"));
+
+        int listener_hits = 0;
+        uint64_t last_seen_ver = 0;
+        const auto lid = store.add_listener([&](const ave::PlaybackSnapshotPtr& s) {
+            listener_hits++;
+            last_seen_ver = s->version;
+        });
+
+        // Mutate original Timeline & MediaPool, then publish v2
+        tl.find_track_mut(v1_id)->set_muted(true);
+        tl.find_track_mut(v1_id)->remove_item("item-1");
+        pool.find_asset_mut("asset-1")->set_file_path("D:/media/clip_relinked.mp4");
+
+        const ave::PlaybackSnapshotPtr snap2 = store.publish(tl, pool);
+        ASSERT_EQ(snap2->version, 2u);
+        ASSERT_EQ(store.current_version(), 2u);
+        ASSERT_EQ(listener_hits, 1);
+        ASSERT_EQ(last_seen_ver, 2u);
+
+        // Retained snap1 MUST remain completely unaffected and immutable
+        ASSERT_EQ(snap1->version, 1u);
+        ASSERT_TRUE(!snap1->timeline.video_tracks()[0].muted());
+        ASSERT_EQ(snap1->timeline.video_tracks()[0].items().size(), 1u);
+        ASSERT_EQ(snap1->find_asset("asset-1")->file_path(), std::filesystem::path("D:/media/clip_a.mp4"));
+
+        // New snap2 reflects updated state
+        ASSERT_TRUE(snap2->timeline.video_tracks()[0].muted());
+        ASSERT_EQ(snap2->timeline.video_tracks()[0].items().size(), 0u);
+        ASSERT_EQ(snap2->find_asset("asset-1")->file_path(), std::filesystem::path("D:/media/clip_relinked.mp4"));
+
+        store.remove_listener(lid);
+        store.publish(tl, pool);
+        ASSERT_EQ(store.current_version(), 3u);
+        ASSERT_EQ(listener_hits, 1);
+
+        // Controller stale snapshot_version rejection
+        ave::PlaybackController controller(ave::Rational{24, 1}, ave::Rational{5, 1}, 8);
+        controller.set_snapshot_version(2);
+        const uint64_t cur_gen = controller.clock().current_seek_generation();
+
+        ave::VideoFrame outdated_snap_frame;
+        outdated_snap_frame.seek_generation = cur_gen;
+        outdated_snap_frame.snapshot_version = 1;
+        outdated_snap_frame.pts = ave::Rational{0, 1};
+        outdated_snap_frame.duration = ave::Rational{1, 24};
+        ASSERT_EQ(controller.evaluate_frame(outdated_snap_frame, ave::Rational(0, 1)), ave::FrameSyncAction::Stale);
+
+        ave::VideoFrame current_snap_frame = outdated_snap_frame;
+        current_snap_frame.snapshot_version = 2;
+        controller.video_queue().push(outdated_snap_frame);
+        controller.video_queue().push(current_snap_frame);
+
+        auto fetched = controller.fetch_next_display_frame();
+        ASSERT_TRUE(fetched.has_value());
+        ASSERT_EQ(fetched->snapshot_version, 2u);
+        ASSERT_EQ(controller.metrics().frames_dropped, 1u);
+        ASSERT_EQ(controller.metrics().frames_rendered, 1u);
     }
 
     std::cout << "[PlaybackEngineTest] All playback engine assertions passed!" << std::endl;
