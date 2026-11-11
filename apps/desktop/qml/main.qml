@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Layouts
 
 ApplicationWindow {
     id: root
@@ -9,13 +8,82 @@ ApplicationWindow {
     height: 900
     minimumWidth: 1100
     minimumHeight: 650
-    title: qsTr("Autonomous Video Editor (AVE) — Professional Studio")
+
+    readonly property bool hasLiveTimeline: (typeof timelineModel !== "undefined" && timelineModel !== null)
+    readonly property bool hasLivePlayback: (typeof playbackService !== "undefined" && playbackService !== null)
+    readonly property bool isTextEntryFocused: {
+        var item = root.activeFocusItem
+        if (!item) {
+            return false
+        }
+        if (item instanceof TextInput) {
+            return !item.readOnly
+        }
+        if (item instanceof TextEdit) {
+            return !item.readOnly
+        }
+        return false
+    }
+
+    title: hasLiveTimeline
+           ? (timelineModel.projectName + (timelineModel.isDirty ? " *" : "") + qsTr(" — Autonomous Video Editor (AVE)"))
+           : qsTr("Autonomous Video Editor (AVE)")
     color: "#0f0f13"
+
+    // Global NLE Keyboard Shortcuts (disabled while typing inside editable text controls)
+    Shortcut {
+        sequence: "Space"
+        enabled: root.hasLivePlayback && !root.isTextEntryFocused
+        onActivated: playbackService.togglePlay()
+    }
+
+    Shortcut {
+        sequence: "Left"
+        enabled: root.hasLivePlayback && !root.isTextEntryFocused
+        onActivated: playbackService.stepBackward(1)
+    }
+
+    Shortcut {
+        sequence: "Right"
+        enabled: root.hasLivePlayback && !root.isTextEntryFocused
+        onActivated: playbackService.stepForward(1)
+    }
+
+    Shortcut {
+        sequence: "V"
+        enabled: root.hasLiveTimeline && !root.isTextEntryFocused
+        onActivated: timelineModel.activeTool = 0
+    }
+
+    Shortcut {
+        sequence: "C"
+        enabled: root.hasLiveTimeline && !root.isTextEntryFocused
+        onActivated: timelineModel.activeTool = 1
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Delete, "Backspace"]
+        enabled: root.hasLiveTimeline && timelineModel.selectedClipId !== "" && !root.isTextEntryFocused
+        onActivated: timelineModel.deleteSelected()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Undo]
+        enabled: root.hasLiveTimeline && timelineModel.canUndo && !root.isTextEntryFocused
+        onActivated: timelineModel.undo()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Redo, "Ctrl+Shift+Z"]
+        enabled: root.hasLiveTimeline && timelineModel.canRedo && !root.isTextEntryFocused
+        onActivated: timelineModel.redo()
+    }
 
     // Top Studio Navigation & Tool Toolbar
     header: ToolbarView {
         id: toolbar
         height: 60
+        onOpenAiAssistantRequested: inspector.activeTab = 1
     }
 
     // Master Workspace Vertical Splitter
@@ -75,7 +143,7 @@ ApplicationWindow {
                 anchors.fill: parent
                 orientation: Qt.Horizontal
 
-                // Track Headers (Lock, Mute, Solo, Vol)
+                // Track Headers (Lock, Mute, Solo)
                 TrackHeaderView {
                     id: trackHeader
                     SplitView.preferredWidth: 220
@@ -90,11 +158,6 @@ ApplicationWindow {
                     id: timelineCanvas
                     SplitView.fillWidth: true
                     SplitView.minimumWidth: 400
-                    onPlayheadMoved: (posX) => {
-                        // Keep timecode and viewer playhead ratio in sync
-                        var ratio = posX / 1500.0
-                        programViewer.playheadRatio = Math.min(1.0, Math.max(0.0, ratio))
-                    }
                 }
             }
         }
