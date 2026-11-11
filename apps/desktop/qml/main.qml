@@ -77,13 +77,17 @@ ApplicationWindow {
 
                 // Track Headers (Lock, Mute, Solo, Vol)
                 TrackHeaderView {
+                    id: trackHeader
                     SplitView.preferredWidth: 220
                     SplitView.minimumWidth: 180
                     SplitView.maximumWidth: 280
+                    contentY: timelineCanvas.contentY
+                    onVerticalScrollDelta: (deltaY) => timelineCanvas.scrollVerticalBy(deltaY)
                 }
 
                 // Timeline Canvas (SMPTE Ruler, Scrubber, Video/Audio Tracks with Waveforms)
                 TimelineCanvas {
+                    id: timelineCanvas
                     SplitView.fillWidth: true
                     SplitView.minimumWidth: 400
                     onPlayheadMoved: (posX) => {
