@@ -30,26 +30,91 @@ jobs:
           vulkan-components: Vulkan-Headers, Vulkan-Loader
           vulkan-use-cache: true
 
-      - name: Set up FFmpeg Shared Dev Libraries
+      - name: Set up Qt 6.8.3
+        id: install-qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          cache: true
+
+      - name: Set up FFmpeg LGPL Shared Dev Libraries
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip" -OutFile ffmpeg.zip
-          Expand-Archive ffmpeg.zip -DestinationPath C:\
-          $ffmpeg_dir = (Get-ChildItem -Path C:\ -Filter "ffmpeg-*-win64-gpl-shared" -Directory | Select-Object -First 1).FullName
+          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl-shared.zip" -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath C:\ -Force
+          Remove-Item ffmpeg.zip -Force
+          $ffmpeg_dir = (Get-ChildItem -Path C:\ -Filter "ffmpeg-*-win64-lgpl-shared" -Directory | Select-Object -First 1).FullName
+          if (-not $ffmpeg_dir -or -not (Test-Path "$ffmpeg_dir\include\libavformat\avformat.h")) {
+            throw "Failed to locate extracted LGPL FFmpeg SDK under C:\"
+          }
           echo "FFMPEG_DIR=$ffmpeg_dir" >> $env:GITHUB_ENV
           echo "$ffmpeg_dir\bin" >> $env:GITHUB_PATH
-          echo "Installed FFmpeg at $ffmpeg_dir"
+          echo "Installed LGPL FFmpeg at $ffmpeg_dir"
+
+      - name: Cache vcpkg binary archives
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\vcpkg-archives
+          key: vcpkg-x64-windows-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-x64-windows-
 
       - name: Configure CMake
+        shell: pwsh
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ runner.temp }}\vcpkg-archives
         run: |
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAVE_BUILD_TESTS=ON -DAVE_BUILD_VULKAN_PROBE=ON -DAVE_BUILD_DESKTOP=ON
+          New-Item -ItemType Directory -Path $env:VCPKG_DEFAULT_BINARY_CACHE -Force | Out-Null
+          $vcpkgRoot = if ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { $env:VCPKG_ROOT }
+          if (-not $vcpkgRoot -or -not (Test-Path "$vcpkgRoot\scripts\buildsystems\vcpkg.cmake")) {
+            throw "vcpkg toolchain not found (VCPKG_INSTALLATION_ROOT='$env:VCPKG_INSTALLATION_ROOT', VCPKG_ROOT='$env:VCPKG_ROOT')"
+          }
+          $baseline = (Get-Content vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
+          if ($baseline -and (Test-Path "$vcpkgRoot\.git")) {
+            git -C $vcpkgRoot cat-file -e "${baseline}^{commit}" 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              git -C $vcpkgRoot fetch origin $baseline --depth=1 2>$null
+              if ($LASTEXITCODE -ne 0) {
+                git -C $vcpkgRoot fetch --unshallow origin 2>$null
+              }
+            }
+          }
+          $qtPrefix = "${{ steps.install-qt.outputs.qt-root-dir }}".Replace('\', '/')
+          $ffmpegDir = "$env:FFMPEG_DIR".Replace('\', '/')
+          cmake -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="$($vcpkgRoot.Replace('\', '/'))/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -DCMAKE_PREFIX_PATH="$qtPrefix" `
+            -DFFMPEG_DIR="$ffmpegDir" `
+            -DAVE_BUILD_TESTS=ON `
+            -DAVE_BUILD_VULKAN_PROBE=ON `
+            -DAVE_BUILD_DESKTOP=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build
+        shell: pwsh
         run: |
           cmake --build build --config Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run CTest
         shell: pwsh
         run: |
           Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\Windows Error Reporting' -Name 'DontShowUI' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
           ctest --test-dir build --output-on-failure --timeout 60
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify Desktop Shell Smoke & Headless QML
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
+        run: |
+          .\build\apps\desktop\ave_desktop.exe --smoke-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\build\apps\desktop\ave_desktop.exe --verify-qml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

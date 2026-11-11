@@ -108,13 +108,17 @@ if(TARGET ave_playback)
     target_link_libraries(ave_stream_decoder_test PRIVATE ave_playback ave_core)
     target_compile_features(ave_stream_decoder_test PRIVATE cxx_std_20)
     add_test(NAME StreamDecoderTest COMMAND ave_stream_decoder_test "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sample_test.mp4")
-    set_tests_properties(StreamDecoderTest PROPERTIES ENVIRONMENT "PATH=${FFmpeg_INCLUDE_DIR}/../bin;${CMAKE_CURRENT_BINARY_DIR};$ENV{PATH}")
+    set_tests_properties(StreamDecoderTest PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${CMAKE_CURRENT_BINARY_DIR};PATH=path_list_prepend:${FFmpeg_INCLUDE_DIR}/../bin"
+    )
 
     add_executable(ave_playback_integration_test playback_integration_test.cpp)
     target_link_libraries(ave_playback_integration_test PRIVATE ave_playback ave_audio ave_core)
     target_compile_features(ave_playback_integration_test PRIVATE cxx_std_20)
     add_test(NAME PlaybackIntegrationTest COMMAND ave_playback_integration_test "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sample_test.mp4")
-    set_tests_properties(PlaybackIntegrationTest PROPERTIES ENVIRONMENT "PATH=${FFmpeg_INCLUDE_DIR}/../bin;${CMAKE_CURRENT_BINARY_DIR};$ENV{PATH}")
+    set_tests_properties(PlaybackIntegrationTest PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${CMAKE_CURRENT_BINARY_DIR};PATH=path_list_prepend:${FFmpeg_INCLUDE_DIR}/../bin"
+    )
 endif()
 
 if(TARGET ave_playback AND TARGET ave_render)
@@ -122,7 +126,9 @@ if(TARGET ave_playback AND TARGET ave_render)
     target_link_libraries(ave_compositing_integration_test PRIVATE ave_playback ave_render ave_core ave_audio)
     target_compile_features(ave_compositing_integration_test PRIVATE cxx_std_20)
     add_test(NAME CompositingIntegrationTest COMMAND ave_compositing_integration_test "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sample_test.mp4")
-    set_tests_properties(CompositingIntegrationTest PROPERTIES ENVIRONMENT "PATH=${FFmpeg_INCLUDE_DIR}/../bin;${CMAKE_CURRENT_BINARY_DIR};$ENV{PATH}")
+    set_tests_properties(CompositingIntegrationTest PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${CMAKE_CURRENT_BINARY_DIR};PATH=path_list_prepend:${FFmpeg_INCLUDE_DIR}/../bin"
+    )
 endif()
 
 if(TARGET ave_render)
@@ -152,16 +158,34 @@ if(TARGET ave_media)
     target_link_libraries(ave_ffmpeg_probe_test PRIVATE ave_media ave_core)
     target_compile_features(ave_ffmpeg_probe_test PRIVATE cxx_std_20)
     add_test(NAME FFmpegProbeTest COMMAND ave_ffmpeg_probe_test "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sample_test.mp4")
-    set_tests_properties(FFmpegProbeTest PROPERTIES ENVIRONMENT "PATH=${FFmpeg_INCLUDE_DIR}/../bin;${CMAKE_CURRENT_BINARY_DIR};$ENV{PATH}")
+    set_tests_properties(FFmpegProbeTest PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${CMAKE_CURRENT_BINARY_DIR};PATH=path_list_prepend:${FFmpeg_INCLUDE_DIR}/../bin"
+    )
 
     add_executable(ave_media_cache_test media_cache_test.cpp)
     target_link_libraries(ave_media_cache_test PRIVATE ave_media ave_core)
     target_compile_features(ave_media_cache_test PRIVATE cxx_std_20)
     add_test(NAME MediaCacheTest COMMAND ave_media_cache_test "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sample_test.mp4")
-    set_tests_properties(MediaCacheTest PROPERTIES ENVIRONMENT "PATH=${FFmpeg_INCLUDE_DIR}/../bin;${CMAKE_CURRENT_BINARY_DIR};$ENV{PATH}")
+    set_tests_properties(MediaCacheTest PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${CMAKE_CURRENT_BINARY_DIR};PATH=path_list_prepend:${FFmpeg_INCLUDE_DIR}/../bin"
+    )
 endif()
 
 if(TARGET GTest::gtest AND TARGET ave_desktop_services AND TARGET ave_playback AND TARGET ave_media)
+    get_target_property(_ave_qt6_qmake_test Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(_ave_qt6_bin_dir_test "${_ave_qt6_qmake_test}" DIRECTORY)
+    get_filename_component(_ave_qt6_root_dir_test "${_ave_qt6_bin_dir_test}" DIRECTORY)
+    set(_ave_qt6_test_env
+        "QT_QPA_PLATFORM=offscreen"
+        "QT_PLUGIN_PATH=${_ave_qt6_root_dir_test}/plugins"
+        "QML_IMPORT_PATH=${_ave_qt6_root_dir_test}/qml"
+    )
+    set(_ave_qt6_test_env_mod
+        "PATH=path_list_prepend:${CMAKE_CURRENT_BINARY_DIR}"
+        "PATH=path_list_prepend:${FFmpeg_INCLUDE_DIR}/../bin"
+        "PATH=path_list_prepend:${_ave_qt6_bin_dir_test}"
+    )
+
     add_executable(ave_phase10_import_test phase10_import_test.cpp)
     target_link_libraries(ave_phase10_import_test PRIVATE
         ave_desktop_services
@@ -179,10 +203,9 @@ if(TARGET GTest::gtest AND TARGET ave_desktop_services AND TARGET ave_playback A
     target_compile_features(ave_phase10_import_test PRIVATE cxx_std_20)
 
     add_test(NAME Phase10ImportTest COMMAND ave_phase10_import_test)
-    get_target_property(_ave_qt6_qmake_test Qt6::qmake IMPORTED_LOCATION)
-    get_filename_component(_ave_qt6_bin_dir_test "${_ave_qt6_qmake_test}" DIRECTORY)
     set_tests_properties(Phase10ImportTest PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=${_ave_qt6_bin_dir_test};${FFmpeg_INCLUDE_DIR}/../bin;${CMAKE_CURRENT_BINARY_DIR};$ENV{PATH}"
+        ENVIRONMENT "${_ave_qt6_test_env}"
+        ENVIRONMENT_MODIFICATION "${_ave_qt6_test_env_mod}"
     )
 
     if(TARGET ave_render AND TARGET ave_audio)
@@ -207,7 +230,8 @@ if(TARGET GTest::gtest AND TARGET ave_desktop_services AND TARGET ave_playback A
 
         add_test(NAME Phase10FrameProviderTest COMMAND ave_phase10_frame_provider_test)
         set_tests_properties(Phase10FrameProviderTest PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=${_ave_qt6_bin_dir_test};${FFmpeg_INCLUDE_DIR}/../bin;${CMAKE_CURRENT_BINARY_DIR};$ENV{PATH}"
+            ENVIRONMENT "${_ave_qt6_test_env}"
+            ENVIRONMENT_MODIFICATION "${_ave_qt6_test_env_mod}"
         )
 
         add_executable(ave_phase10_services_property_test phase10_services_property_test.cpp)
@@ -233,7 +257,8 @@ if(TARGET GTest::gtest AND TARGET ave_desktop_services AND TARGET ave_playback A
 
         add_test(NAME Phase10ServicesPropertyTest COMMAND ave_phase10_services_property_test)
         set_tests_properties(Phase10ServicesPropertyTest PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=${_ave_qt6_bin_dir_test};${FFmpeg_INCLUDE_DIR}/../bin;${CMAKE_CURRENT_BINARY_DIR};$ENV{PATH}"
+            ENVIRONMENT "${_ave_qt6_test_env}"
+            ENVIRONMENT_MODIFICATION "${_ave_qt6_test_env_mod}"
         )
 
         if(TARGET ave_ai)
@@ -258,7 +283,8 @@ if(TARGET GTest::gtest AND TARGET ave_desktop_services AND TARGET ave_playback A
 
             add_test(NAME Phase10AiStudioTest COMMAND ave_phase10_ai_studio_test)
             set_tests_properties(Phase10AiStudioTest PROPERTIES
-                ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PATH=${_ave_qt6_bin_dir_test};${FFmpeg_INCLUDE_DIR}/../bin;${CMAKE_CURRENT_BINARY_DIR};$ENV{PATH}"
+                ENVIRONMENT "${_ave_qt6_test_env}"
+                ENVIRONMENT_MODIFICATION "${_ave_qt6_test_env_mod}"
             )
         endif()
     endif()

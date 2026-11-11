@@ -49,8 +49,8 @@ Using `CMakePresets.json` (`x64-debug` / `x64-release`) installs manifest depend
 
 ---
 
-## 2. Pre-Merge CI / Release Prerequisite (Not Required for Local Builds)
-- [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) currently downloads `win64-gpl-shared` FFmpeg. Before merging Phase 10 or distributing binaries, update CI to use an **LGPL shared** FFmpeg archive + install `Qt 6.8.3 (msvc2022_64)` + `vcpkg`.
+## 2. CI Workflow Configuration
+- [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) provisions **Qt 6.8.3 (`win64_msvc2022_64`)** via `jurplel/install-qt-action@v4`, **LGPL shared** FFmpeg (`ffmpeg-master-latest-win64-lgpl-shared.zip`, matching [ADR-0005](adr/0005-ffmpeg-media-foundation.md)), and **`vcpkg`** (`x64-windows` binary-cached manifest dependencies `gtest` and `nlohmann-json`).
 
 ---
 
