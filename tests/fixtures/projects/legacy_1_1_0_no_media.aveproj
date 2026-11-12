@@ -1,0 +1,28 @@
+{
+  "schema_version": "1.1.0",
+  "id": "proj-legacy-110-nomedia",
+  "name": "Legacy 1.1.0 No MediaPool",
+  "timeline": {
+    "schema_version": "1.1.0",
+    "id": "tl-legacy-110-nm",
+    "name": "Legacy 1.1 Seq",
+    "frame_rate": { "num": 30000, "den": 1001 },
+    "width": 1920,
+    "height": 1080,
+    "sample_rate": 48000,
+    "video_tracks": [
+      {
+        "id": "v1-110-nm",
+        "name": "V1",
+        "type": "video",
+        "index": 0,
+        "muted": false,
+        "soloed": false,
+        "locked": true,
+        "items": []
+      }
+    ],
+    "audio_tracks": []
+  }
+}
+

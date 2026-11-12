@@ -73,11 +73,12 @@ Project Project::from_json(const std::string& json_text) {
     }
 
     const bool is_legacy_1_0 = (source_version == LEGACY_SCHEMA_VERSION_1_0);
-    const bool is_current_1_1 = (source_version == CURRENT_SCHEMA_VERSION);
-    if (!is_legacy_1_0 && !is_current_1_1) {
+    const bool is_legacy_1_1 = (source_version == LEGACY_SCHEMA_VERSION_1_1);
+    const bool is_current_1_2 = (source_version == CURRENT_SCHEMA_VERSION);
+    if (!is_legacy_1_0 && !is_legacy_1_1 && !is_current_1_2) {
         throw std::runtime_error(
             "Project migration error: unsupported schema_version '" + source_version +
-            "' (supported versions: 1.0.0, 1.1.0)");
+            "' (supported versions: 1.0.0, 1.1.0, 1.2.0)");
     }
 
     std::string id;
@@ -117,7 +118,8 @@ Project Project::from_json(const std::string& json_text) {
         parsed_pool = MediaPool::from_json(root.at("media_pool").dump());
     }
 
-    // Legacy 1.0.0 projects deterministically migrate up to CURRENT_SCHEMA_VERSION (1.1.0).
+    // Legacy 1.0.0 and 1.1.0 projects deterministically migrate up to CURRENT_SCHEMA_VERSION (1.2.0).
+    // If legacy projects omit 'media_pool', parsed_pool is deterministically initialized as an empty MediaPool.
     Project proj(std::move(id), std::move(name), CURRENT_SCHEMA_VERSION);
     proj.timeline_ = std::move(parsed_timeline);
     proj.media_pool_ = std::move(parsed_pool);

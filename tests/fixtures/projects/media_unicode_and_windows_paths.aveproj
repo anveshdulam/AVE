@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.2.0",
+  "id": "proj-media-unicode",
+  "name": "Unicode Media & Windows Paths",
+  "timeline": {
+    "schema_version": "1.1.0",
+    "id": "tl-media-uni",
+    "name": "Main Timeline",
+    "frame_rate": { "num": 24, "den": 1 },
+    "video_tracks": [],
+    "audio_tracks": []
+  },
+  "media_pool": {
+    "schema_version": "1.2.0",
+    "root_bin_id": "bin-uni-root",
+    "assets": [
+      {
+        "id": "asset-uni-win",
+        "file_path": "D:\\Studio Projects\\Take \"A\"\\映像\\shot_01_最終_हिन्दी.mov",
+        "display_name": "Shot \"Alpha\" — 最終 (हिन्दी)\nTake 2",
+        "file_size_bytes": 4096000,
+        "container_format": "mov",
+        "duration_seconds": { "num": 12, "den": 1 },
+        "streams": [
+          {
+            "index": 0,
+            "type": "video",
+            "codec_name": "h264",
+            "timebase": { "num": 1, "den": 24 },
+            "duration_ticks": 288
+          }
+        ]
+      }
+    ],
+    "clips": [
+      {
+        "id": "clip-uni-1",
+        "asset_id": "asset-uni-win",
+        "name": "Subclip \"A\"\\Cut\t— 映像",
+        "color_tag": "Coral",
+        "source_in": { "num": 1, "den": 1 },
+        "source_out": { "num": 9, "den": 1 }
+      }
+    ],
+    "bins": [
+      {
+        "id": "bin-uni-root",
+        "name": "Master Bin",
+        "parent_id": "",
+        "clip_ids": [],
+        "child_bin_ids": ["bin-uni-sub"]
+      },
+      {
+        "id": "bin-uni-sub",
+        "name": "映像フォルダ — \"हिन्दी\"\\Dailies",
+        "parent_id": "bin-uni-root",
+        "clip_ids": ["clip-uni-1"],
+        "child_bin_ids": []
+      }
+    ]
+  }
+}
+

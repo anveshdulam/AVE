@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <cassert>
+#include <stdexcept>
 
 #define ASSERT_TRUE(expr) do { \
     if (!(expr)) { \
@@ -146,6 +147,120 @@ int test_clip_movement_and_search() {
     return 0;
 }
 
+int test_media_pool_json_roundtrip_hierarchy_and_validation() {
+    ave::MediaPool pool;
+    const std::string root_id = pool.root_bin_id();
+    const std::string bin_footage = pool.create_bin("Footage — \"A\"\\Master", root_id);
+    const std::string bin_interviews = pool.create_bin("Interviews (映像)", bin_footage);
+    const std::string bin_audio = pool.create_bin("Audio Stems", root_id);
+
+    const std::filesystem::path cam_path(
+        std::u8string(u8"D:\\Studio Media\\Take \"1\"\\映像\\cam_a_最終.mov"));
+    ave::SourceStream vs(0, ave::StreamType::Video, "prores", ave::Rational{1001, 24000}, 2400);
+    ave::VideoStreamInfo vi;
+    vi.width = 3840;
+    vi.height = 2160;
+    vi.frame_rate = ave::Rational{24000, 1001};
+    vi.pixel_format = "yuv422p10le";
+    vi.bit_depth = 10;
+    vs.set_video_info(vi);
+
+    ave::MediaAsset cam_asset("asset-cam-1", cam_path, "cam_a_最終.mov\nMain", 5000000ULL, "mov",
+                              ave::Rational{1001, 10}, {vs});
+
+    ave::SourceStream as(0, ave::StreamType::Audio, "pcm_s24le", ave::Rational{1, 48000}, 960000);
+    ave::AudioStreamInfo ai;
+    ai.sample_rate = 48000;
+    ai.channels = 2;
+    ai.channel_layout = "stereo";
+    ai.sample_format = "s32";
+    ai.bit_depth = 24;
+    as.set_audio_info(ai);
+    ave::MediaAsset wav_asset("asset-wav-1", "D:\\Studio Media\\boom_01.wav", "boom_01.wav", 1920000ULL, "wav",
+                              ave::Rational{20, 1}, {as});
+
+    pool.register_asset(cam_asset);
+    pool.register_asset(wav_asset);
+
+    const std::string c1 = pool.create_clip("asset-cam-1", bin_interviews, "Intro \"Hero\"");
+    pool.find_clip_mut(c1)->set_source_range(ave::Rational{5005, 1000}, ave::Rational{25025, 1000});
+    pool.find_clip_mut(c1)->set_color_tag("Warm Orange");
+
+    const std::string c2 = pool.create_clip("asset-cam-1", bin_interviews, "Cutaway\tLine\nTwo");
+    pool.find_clip_mut(c2)->set_source_range(ave::Rational{30, 1}, ave::Rational{45, 1});
+    pool.find_clip_mut(c2)->set_color_tag("Cerulean");
+
+    const std::string c3 = pool.create_clip("asset-wav-1", bin_audio, "Boom Clean");
+    pool.find_clip_mut(c3)->set_color_tag("Forest Green");
+
+    const std::string json_a = pool.to_json();
+    const std::string json_b = pool.to_json();
+    ASSERT_EQ(json_a, json_b);
+
+    const ave::MediaPool restored = ave::MediaPool::from_json(json_a);
+    ASSERT_EQ(restored, pool);
+    ASSERT_EQ(restored.root_bin_id(), root_id);
+    ASSERT_EQ(restored.asset_count(), 2u);
+    ASSERT_EQ(restored.find_asset("asset-cam-1")->file_path().wstring(), cam_path.wstring());
+
+    const auto* r_root = restored.find_bin(root_id);
+    ASSERT_TRUE(r_root != nullptr);
+    ASSERT_EQ(r_root->child_bin_ids().size(), 2u);
+    ASSERT_EQ(r_root->child_bin_ids()[0], bin_footage);
+    ASSERT_EQ(r_root->child_bin_ids()[1], bin_audio);
+
+    const auto* r_interviews = restored.find_bin(bin_interviews);
+    ASSERT_TRUE(r_interviews != nullptr);
+    ASSERT_EQ(r_interviews->parent_id(), bin_footage);
+    ASSERT_EQ(r_interviews->clip_ids().size(), 2u);
+    ASSERT_EQ(r_interviews->clip_ids()[0], c1);
+    ASSERT_EQ(r_interviews->clip_ids()[1], c2);
+
+    const auto* rc1 = restored.find_clip(c1);
+    ASSERT_TRUE(rc1 != nullptr);
+    ASSERT_EQ(rc1->color_tag(), "Warm Orange");
+    ASSERT_EQ(rc1->source_in(), ave::Rational(5005, 1000));
+    ASSERT_EQ(rc1->source_out(), ave::Rational(25025, 1000));
+
+    auto expect_throw = [](const std::string& bad_json) {
+        try {
+            (void)ave::MediaPool::from_json(bad_json);
+            return false;
+        } catch (const std::exception&) {
+            return true;
+        }
+    };
+
+    // Malformed JSON & bad version
+    ASSERT_TRUE(expect_throw("{not valid"));
+    ASSERT_TRUE(expect_throw(R"({"schema_version":"9.9.0"})"));
+    // Duplicate asset ID
+    ASSERT_TRUE(expect_throw(R"({"assets":[{"id":"a1"},{"id":"a1"}]})"));
+    // Broken asset reference in clip
+    ASSERT_TRUE(expect_throw(R"({"assets":[],"clips":[{"id":"c1","asset_id":"missing-asset"}]})"));
+    // Duplicate clip ID
+    ASSERT_TRUE(expect_throw(R"({"assets":[{"id":"a1"}],"clips":[{"id":"c1","asset_id":"a1"},{"id":"c1","asset_id":"a1"}]})"));
+    // Negative / inverted subclip range
+    ASSERT_TRUE(expect_throw(R"({"assets":[{"id":"a1"}],"clips":[{"id":"c1","asset_id":"a1","source_in":{"num":5,"den":1},"source_out":{"num":2,"den":1}}]})"));
+    ASSERT_TRUE(expect_throw(R"({"assets":[{"id":"a1"}],"clips":[{"id":"c1","asset_id":"a1","source_in":{"num":-1,"den":1},"source_out":{"num":2,"den":1}}]})"));
+    // Invalid parent bin reference
+    ASSERT_TRUE(expect_throw(R"({"root_bin_id":"r","bins":[{"id":"r","parent_id":""},{"id":"b1","parent_id":"no-such-bin"}]})"));
+    // Cycle in bin hierarchy
+    ASSERT_TRUE(expect_throw(R"({"root_bin_id":"r","bins":[{"id":"r","parent_id":"","child_bin_ids":[]},{"id":"b1","parent_id":"b2","child_bin_ids":["b2"]},{"id":"b2","parent_id":"b1","child_bin_ids":["b1"]}]})"));
+    // Duplicate clip membership across bins
+    ASSERT_TRUE(expect_throw(R"({
+        "root_bin_id":"r",
+        "assets":[{"id":"a1"}],
+        "clips":[{"id":"c1","asset_id":"a1"}],
+        "bins":[
+            {"id":"r","parent_id":"","clip_ids":["c1"],"child_bin_ids":["b1"]},
+            {"id":"b1","parent_id":"r","clip_ids":["c1"],"child_bin_ids":[]}
+        ]
+    })"));
+
+    return 0;
+}
+
 int main() {
     std::cout << "Running MediaPool Unit Tests..." << std::endl;
 
@@ -160,6 +275,9 @@ int main() {
 
     if (test_clip_movement_and_search() != 0) return 1;
     std::cout << "  [PASS] test_clip_movement_and_search" << std::endl;
+
+    if (test_media_pool_json_roundtrip_hierarchy_and_validation() != 0) return 1;
+    std::cout << "  [PASS] test_media_pool_json_roundtrip_hierarchy_and_validation" << std::endl;
 
     std::cout << "All MediaPool tests passed successfully." << std::endl;
     return 0;

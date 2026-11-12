@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.2.0",
+  "id": "proj-dup-asset",
+  "name": "Duplicate Asset ID",
+  "timeline": {
+    "id": "tl-dup",
+    "frame_rate": { "num": 24, "den": 1 }
+  },
+  "media_pool": {
+    "assets": [
+      {
+        "id": "dup-asset-1",
+        "file_path": "D:\\Media\\one.mp4",
+        "display_name": "one.mp4"
+      },
+      {
+        "id": "dup-asset-1",
+        "file_path": "D:\\Media\\two.mp4",
+        "display_name": "two.mp4"
+      }
+    ],
+    "clips": [],
+    "bins": []
+  }
+}
+

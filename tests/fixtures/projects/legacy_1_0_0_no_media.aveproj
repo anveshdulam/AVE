@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0.0",
+  "id": "proj-legacy-100-nomedia",
+  "name": "Legacy 1.0.0 No MediaPool",
+  "timeline": {
+    "id": "tl-legacy-100-nm",
+    "name": "Legacy Seq",
+    "frame_rate": { "num": 24, "den": 1 },
+    "video_tracks": [
+      {
+        "id": "v1-nm",
+        "name": "V1",
+        "type": "video",
+        "index": 0,
+        "items": []
+      }
+    ],
+    "audio_tracks": []
+  }
+}
+

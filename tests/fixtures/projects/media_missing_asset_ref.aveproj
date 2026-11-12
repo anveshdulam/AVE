@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.2.0",
+  "id": "proj-bad-asset-ref",
+  "name": "Broken Asset Ref",
+  "timeline": {
+    "id": "tl-bad-ref",
+    "frame_rate": { "num": 24, "den": 1 }
+  },
+  "media_pool": {
+    "assets": [],
+    "clips": [
+      {
+        "id": "clip-orphan",
+        "asset_id": "asset-does-not-exist",
+        "name": "Orphan Clip",
+        "source_in": { "num": 0, "den": 1 },
+        "source_out": { "num": 5, "den": 1 }
+      }
+    ],
+    "bins": []
+  }
+}
+

@@ -4,6 +4,7 @@
 #include <iostream>
 #include <cassert>
 #include <set>
+#include <stdexcept>
 
 #define ASSERT_TRUE(expr) do { \
     if (!(expr)) { \
@@ -155,7 +156,71 @@ int test_media_asset_json_roundtrip() {
     ASSERT_EQ(d_as->audio_info()->sample_rate, 48000);
     ASSERT_EQ(d_as->audio_info()->channels, 6);
     ASSERT_EQ(d_as->audio_info()->channel_layout, "5.1");
+    ASSERT_EQ(d_as->audio_info()->sample_format, "s32");
     ASSERT_EQ(d_as->audio_info()->bit_depth, 24);
+    ASSERT_EQ(deserialized, original);
+
+    return 0;
+}
+
+int test_media_asset_special_chars_unicode_and_validation() {
+    const std::filesystem::path win_uni_path(
+        std::u8string(u8"D:\\Studio Projects\\Take \"A\"\\映像\\shot_01_最終_हिन्दी.mov"));
+
+    std::vector<ave::SourceStream> streams;
+    ave::SourceStream vs(0, ave::StreamType::Video, "prores", ave::Rational{1001, 24000}, 288);
+    ave::VideoStreamInfo vi;
+    vi.width = 1920;
+    vi.height = 1080;
+    vi.frame_rate = ave::Rational{24000, 1001};
+    vi.pixel_aspect_ratio = ave::Rational{1, 1};
+    vi.pixel_format = "yuv422p10le";
+    vi.color_space = "bt2020nc";
+    vi.color_range = "full";
+    vi.bit_depth = 10;
+    vs.set_video_info(vi);
+    streams.push_back(vs);
+
+    ave::SourceStream ss(1, ave::StreamType::Subtitle, "mov_text", ave::Rational{1, 1000}, 12000);
+    streams.push_back(ss);
+
+    ave::MediaAsset original("asset-win-uni-1",
+                             win_uni_path,
+                             "Shot \"Alpha\" — 最終 (हिन्दी)\nTake 2\tCut",
+                             123456789ULL,
+                             "mov",
+                             ave::Rational{12, 1},
+                             streams);
+
+    const std::string encoded_a = original.to_json();
+    const std::string encoded_b = original.to_json();
+    ASSERT_EQ(encoded_a, encoded_b);
+    ASSERT_TRUE(encoded_a.find("\"isOnline\"") == std::string::npos);
+
+    const ave::MediaAsset decoded = ave::MediaAsset::from_json(encoded_a);
+    ASSERT_EQ(decoded, original);
+    ASSERT_EQ(decoded.file_path().wstring(), win_uni_path.wstring());
+    ASSERT_EQ(decoded.to_json(), encoded_a);
+    ASSERT_EQ(decoded.streams().size(), 2u);
+    ASSERT_EQ(decoded.streams()[1].type(), ave::StreamType::Subtitle);
+
+    auto expect_throw = [](const std::string& bad_json) {
+        try {
+            (void)ave::MediaAsset::from_json(bad_json);
+            return false;
+        } catch (const std::exception&) {
+            return true;
+        }
+    };
+
+    ASSERT_TRUE(expect_throw("{broken json"));
+    ASSERT_TRUE(expect_throw(R"({"display_name":"no id"})"));
+    ASSERT_TRUE(expect_throw(R"({"id":""})"));
+    ASSERT_TRUE(expect_throw(R"({"id":"a1","file_size_bytes":-5})"));
+    ASSERT_TRUE(expect_throw(R"({"id":"a1","duration_seconds":{"num":1.5,"den":1}})"));
+    ASSERT_TRUE(expect_throw(R"({"id":"a1","streams":[{"type":"hologram"}]})"));
+    ASSERT_TRUE(expect_throw(R"({"id":"a1","streams":[{"type":"audio","video_info":{"width":1920,"height":1080}}]})"));
+    ASSERT_TRUE(expect_throw(R"({"id":"a1","streams":[{"type":"audio","audio_info":{"sample_rate":0,"channels":2}}]})"));
 
     return 0;
 }
@@ -171,6 +236,9 @@ int main() {
 
     if (test_media_asset_json_roundtrip() != 0) return 1;
     std::cout << "  [PASS] test_media_asset_json_roundtrip" << std::endl;
+
+    if (test_media_asset_special_chars_unicode_and_validation() != 0) return 1;
+    std::cout << "  [PASS] test_media_asset_special_chars_unicode_and_validation" << std::endl;
 
     std::cout << "All MediaAsset tests passed successfully." << std::endl;
     return 0;

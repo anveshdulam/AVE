@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.2.0",
+  "id": "proj-malformed-pool",
+  "name": "Malformed MediaPool Section",
+  "timeline": {
+    "id": "tl-mal-pool",
+    "frame_rate": { "num": 24, "den": 1 }
+  },
+  "media_pool": [
+    "this-must-be-an-object"
+  ]
+}
+

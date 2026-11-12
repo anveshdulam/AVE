@@ -19,7 +19,8 @@ namespace ave {
 class Project {
 public:
     static constexpr const char* LEGACY_SCHEMA_VERSION_1_0 = "1.0.0";
-    static constexpr const char* CURRENT_SCHEMA_VERSION = "1.1.0";
+    static constexpr const char* LEGACY_SCHEMA_VERSION_1_1 = "1.1.0";
+    static constexpr const char* CURRENT_SCHEMA_VERSION = "1.2.0";
 
     Project();
     explicit Project(std::string name);

@@ -355,6 +355,7 @@ namespace {
 
 constexpr const char* kTimelineLegacySchema10 = "1.0.0";
 constexpr const char* kTimelineCurrentSchema11 = "1.1.0";
+constexpr const char* kTimelineSchema12 = "1.2.0";
 
 nlohmann::json rational_to_json(Rational r) {
     return nlohmann::json{{"num", r.numerator()}, {"den", r.denominator()}};
@@ -522,10 +523,12 @@ Timeline Timeline::from_json(const std::string& json_text) {
             throw std::runtime_error("Timeline validation error: 'schema_version' must be a string");
         }
         const std::string ver = root.at("schema_version").get<std::string>();
-        if (ver != kTimelineLegacySchema10 && ver != kTimelineCurrentSchema11) {
+        if (ver != kTimelineLegacySchema10 &&
+            ver != kTimelineCurrentSchema11 &&
+            ver != kTimelineSchema12) {
             throw std::runtime_error(
                 "Timeline schema error: unsupported schema_version '" + ver +
-                "' (supported versions: 1.0.0, 1.1.0)");
+                "' (supported versions: 1.0.0, 1.1.0, 1.2.0)");
         }
     }
 

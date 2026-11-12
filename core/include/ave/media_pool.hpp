@@ -66,6 +66,7 @@ public:
     [[nodiscard]] const std::vector<std::string>& child_bin_ids() const noexcept { return child_bin_ids_; }
 
     void set_name(std::string name) { name_ = std::move(name); }
+    void set_parent_id(std::string parent_id) { parent_id_ = std::move(parent_id); }
     void add_clip(const std::string& clip_id);
     bool remove_clip(const std::string& clip_id);
     void add_child_bin(const std::string& bin_id);
@@ -118,6 +119,8 @@ public:
     // Serialization
     [[nodiscard]] std::string to_json() const;
     [[nodiscard]] static MediaPool from_json(const std::string& json_text);
+
+    [[nodiscard]] bool operator==(const MediaPool& other) const = default;
 
 private:
     std::string root_bin_id_{"root"};

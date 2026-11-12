@@ -605,11 +605,19 @@ TEST(Phase10ServicesPropertyTest, ProjectPersistenceOtioExportAndRelinkWorkflow)
     ave::Project project("Persisted Edit");
     auto store = std::make_shared<ave::PlaybackSnapshotStore>(project.timeline(), project.media_pool());
     ave::ProjectSnapshotCoordinator coordinator(project, store);
+    auto import_queue = std::make_shared<ave::MediaImportQueue>();
+    ave::desktop::MediaPoolModel pool_model(project, import_queue);
     ave::desktop::TimelineModel timeline_model(project, nullptr, &coordinator);
     ave::desktop::InspectorService inspector(project, timeline_model);
 
+    QObject::connect(&timeline_model, &ave::desktop::TimelineModel::projectReloaded,
+                     &pool_model, &ave::desktop::MediaPoolModel::reloadFromProject);
+
     project.media_pool_mut().register_asset(
         make_synthetic_av_asset("asset-persist", "sample_test.mp4", copied_media, ave::Rational{2, 1}, media_bytes));
+    pool_model.reloadFromProject();
+    ASSERT_EQ(pool_model.assetCount(), 1);
+    EXPECT_TRUE(pool_model.data(pool_model.index(0, 0), ave::desktop::MediaPoolModel::IsOnlineRole).toBool());
     const std::string v1_id = project.timeline().video_tracks()[0].id();
 
     ASSERT_TRUE(timeline_model.insertClipFromAsset(QStringLiteral("asset-persist"), QString::fromStdString(v1_id), 0.0));
@@ -662,10 +670,12 @@ TEST(Phase10ServicesPropertyTest, ProjectPersistenceOtioExportAndRelinkWorkflow)
     std::filesystem::rename(copied_media, relocated_media);
     EXPECT_FALSE(std::filesystem::exists(copied_media));
 
-    // Reopen saved project via file:/// URL
+    // Reopen saved project via file:/// URL -> MediaPoolModel re-evaluates actual disk availability (offline!)
     const QString file_url = QUrl::fromLocalFile(QString::fromStdWString(proj_file.wstring())).toString();
     ASSERT_TRUE(timeline_model.openProject(file_url));
     EXPECT_EQ(reload_spy.count(), 2);
+    EXPECT_EQ(pool_model.assetCount(), 1);
+    EXPECT_FALSE(pool_model.data(pool_model.index(0, 0), ave::desktop::MediaPoolModel::IsOnlineRole).toBool());
     EXPECT_EQ(timeline_model.projectName(), QStringLiteral("Persisted Edit"));
     EXPECT_EQ(timeline_model.clipsModel()->rowCount(), 1);
     EXPECT_FALSE(timeline_model.isDirty());
@@ -682,12 +692,13 @@ TEST(Phase10ServicesPropertyTest, ProjectPersistenceOtioExportAndRelinkWorkflow)
     EXPECT_NEAR(inspector.posX(), 42.0, 1e-4);
     EXPECT_NEAR(inspector.opacity(), 0.65, 1e-4);
 
-    // AssetRelinker recovery via relinkOfflineMedia -> republishes PlaybackSnapshot
+    // AssetRelinker recovery via relinkOfflineMedia -> republishes PlaybackSnapshot & updates IsOnlineRole
     const uint64_t version_before_relink = store->current_version();
     const int relinked = timeline_model.relinkOfflineMedia(QString::fromStdWString(moved_dir.wstring()));
     EXPECT_EQ(relinked, 1);
     EXPECT_EQ(reload_spy.count(), 3);
     EXPECT_GT(store->current_version(), version_before_relink);
+    EXPECT_TRUE(pool_model.data(pool_model.index(0, 0), ave::desktop::MediaPoolModel::IsOnlineRole).toBool());
 
     const ave::PlaybackSnapshotPtr post_relink_snap = store->load();
     ASSERT_NE(post_relink_snap, nullptr);
@@ -696,6 +707,7 @@ TEST(Phase10ServicesPropertyTest, ProjectPersistenceOtioExportAndRelinkWorkflow)
     EXPECT_EQ(snap_asset->file_path(), relocated_media);
 
     coordinator.unbind();
+    pool_model.shutdown();
 }
 
 TEST(Phase10ServicesPropertyTest, PlaybackSnapshotRepublishAndConcurrentReaderSafety) {

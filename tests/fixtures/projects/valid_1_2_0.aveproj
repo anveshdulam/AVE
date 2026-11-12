@@ -1,0 +1,216 @@
+{
+  "schema_version": "1.2.0",
+  "id": "proj-valid-120",
+  "name": "Valid 1.2.0 Studio Project",
+  "timeline": {
+    "schema_version": "1.1.0",
+    "id": "tl-valid-120",
+    "name": "Main Cut",
+    "frame_rate": { "num": 24000, "den": 1001 },
+    "width": 3840,
+    "height": 2160,
+    "sample_rate": 48000,
+    "duration": { "num": 15, "den": 1 },
+    "video_tracks": [
+      {
+        "id": "v1-120",
+        "name": "V1",
+        "type": "video",
+        "index": 0,
+        "muted": false,
+        "soloed": false,
+        "locked": false,
+        "items": [
+          {
+            "id": "tl-item-1",
+            "clip_id": "mclip-sub-1",
+            "asset_id": "asset-cam-a",
+            "name": "CamA Interview",
+            "timeline_in": { "num": 0, "den": 1 },
+            "duration": { "num": 15, "den": 1 },
+            "source_in": { "num": 10, "den": 1 },
+            "speed": { "num": 1, "den": 1 },
+            "enabled": true,
+            "transform_x": 0.0,
+            "transform_y": 0.0,
+            "scale_x": 1.0,
+            "scale_y": 1.0,
+            "rotation": 0.0,
+            "anchor_x": 0.5,
+            "anchor_y": 0.5,
+            "opacity": 1.0,
+            "blend_mode": "Over"
+          }
+        ]
+      }
+    ],
+    "audio_tracks": [
+      {
+        "id": "a1-120",
+        "name": "A1",
+        "type": "audio",
+        "index": 0,
+        "muted": false,
+        "soloed": false,
+        "locked": false,
+        "items": [
+          {
+            "id": "tl-aitem-1",
+            "clip_id": "mclip-sfx-1",
+            "asset_id": "asset-boom-wav",
+            "name": "Boom Ambience",
+            "timeline_in": { "num": 0, "den": 1 },
+            "duration": { "num": 12, "den": 1 },
+            "source_in": { "num": 3, "den": 2 },
+            "speed": { "num": 1, "den": 1 },
+            "enabled": true,
+            "transform_x": 0.0,
+            "transform_y": 0.0,
+            "scale_x": 1.0,
+            "scale_y": 1.0,
+            "rotation": 0.0,
+            "anchor_x": 0.5,
+            "anchor_y": 0.5,
+            "opacity": 1.0,
+            "blend_mode": "Over"
+          }
+        ]
+      }
+    ]
+  },
+  "media_pool": {
+    "schema_version": "1.2.0",
+    "root_bin_id": "bin-root-120",
+    "assets": [
+      {
+        "id": "asset-cam-a",
+        "file_path": "D:\\Media\\Studio\\CamA_001.mov",
+        "display_name": "CamA_001.mov",
+        "file_size_bytes": 104857600,
+        "container_format": "mov",
+        "duration_seconds": { "num": 1001, "den": 10 },
+        "streams": [
+          {
+            "index": 0,
+            "type": "video",
+            "codec_name": "prores",
+            "timebase": { "num": 1001, "den": 24000 },
+            "duration_ticks": 2400,
+            "video_info": {
+              "width": 3840,
+              "height": 2160,
+              "frame_rate": { "num": 24000, "den": 1001 },
+              "pixel_aspect_ratio": { "num": 1, "den": 1 },
+              "pixel_format": "yuv422p10le",
+              "color_space": "bt709",
+              "color_range": "limited",
+              "bit_depth": 10
+            }
+          },
+          {
+            "index": 1,
+            "type": "audio",
+            "codec_name": "pcm_s24le",
+            "timebase": { "num": 1, "den": 48000 },
+            "duration_ticks": 4804800,
+            "audio_info": {
+              "sample_rate": 48000,
+              "channels": 2,
+              "channel_layout": "stereo",
+              "sample_format": "s32",
+              "bit_depth": 24
+            }
+          }
+        ]
+      },
+      {
+        "id": "asset-boom-wav",
+        "file_path": "D:\\Media\\Audio\\RoomTone_Stereo.wav",
+        "display_name": "RoomTone_Stereo.wav",
+        "file_size_bytes": 24576000,
+        "container_format": "wav",
+        "duration_seconds": { "num": 45, "den": 1 },
+        "streams": [
+          {
+            "index": 0,
+            "type": "audio",
+            "codec_name": "pcm_f32le",
+            "timebase": { "num": 1, "den": 96000 },
+            "duration_ticks": 4320000,
+            "audio_info": {
+              "sample_rate": 96000,
+              "channels": 2,
+              "channel_layout": "stereo",
+              "sample_format": "flt",
+              "bit_depth": 32
+            }
+          }
+        ]
+      }
+    ],
+    "clips": [
+      {
+        "id": "mclip-sub-1",
+        "asset_id": "asset-cam-a",
+        "name": "Hero Answer Subclip",
+        "color_tag": "Orange",
+        "source_in": { "num": 10, "den": 1 },
+        "source_out": { "num": 25, "den": 1 }
+      },
+      {
+        "id": "mclip-sub-2",
+        "asset_id": "asset-cam-a",
+        "name": "Reaction B-Roll",
+        "color_tag": "Blue",
+        "source_in": { "num": 1001, "den": 20 },
+        "source_out": { "num": 1601, "den": 20 }
+      },
+      {
+        "id": "mclip-sfx-1",
+        "asset_id": "asset-boom-wav",
+        "name": "Clean Room Tone",
+        "color_tag": "Green",
+        "source_in": { "num": 3, "den": 2 },
+        "source_out": { "num": 27, "den": 2 }
+      }
+    ],
+    "bins": [
+      {
+        "id": "bin-root-120",
+        "name": "Master Bin",
+        "parent_id": "",
+        "clip_ids": [],
+        "child_bin_ids": ["bin-video-120", "bin-audio-120"]
+      },
+      {
+        "id": "bin-video-120",
+        "name": "Footage",
+        "parent_id": "bin-root-120",
+        "clip_ids": [],
+        "child_bin_ids": ["bin-interviews-120", "bin-broll-120"]
+      },
+      {
+        "id": "bin-interviews-120",
+        "name": "Interviews",
+        "parent_id": "bin-video-120",
+        "clip_ids": ["mclip-sub-1"],
+        "child_bin_ids": []
+      },
+      {
+        "id": "bin-broll-120",
+        "name": "B-Roll",
+        "parent_id": "bin-video-120",
+        "clip_ids": ["mclip-sub-2"],
+        "child_bin_ids": []
+      },
+      {
+        "id": "bin-audio-120",
+        "name": "Audio Stems",
+        "parent_id": "bin-root-120",
+        "clip_ids": ["mclip-sfx-1"],
+        "child_bin_ids": []
+      }
+    ]
+  }
+}
+

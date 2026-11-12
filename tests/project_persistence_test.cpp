@@ -49,7 +49,7 @@ int main(int argc, char* argv[]) {
     ave::Project project("Persistence Master");
     project.timeline_mut().set_name("Persistence Master");
     ASSERT_EQ(project.schema_version(), ave::Project::CURRENT_SCHEMA_VERSION);
-    ASSERT_EQ(project.schema_version(), "1.1.0");
+    ASSERT_EQ(project.schema_version(), "1.2.0");
     ASSERT_EQ(project.name(), "Persistence Master");
     ASSERT_FALSE(project.is_dirty());
 
@@ -97,6 +97,7 @@ int main(int argc, char* argv[]) {
     ASSERT_TRUE(loaded_proj.timeline().video_tracks()[1].soloed());
     ASSERT_TRUE(loaded_proj.timeline().video_tracks()[1].locked());
     ASSERT_EQ(loaded_proj.media_pool().asset_count(), 1);
+    ASSERT_EQ(loaded_proj.media_pool(), project.media_pool());
 
     const auto* loaded_item = loaded_proj.timeline().find_item("item-1");
     ASSERT_TRUE(loaded_item != nullptr);
@@ -199,9 +200,10 @@ int main(int argc, char* argv[]) {
     }
 
     {
-        // 6b. Valid 1.1.0 project (24000/1001, solo/lock, disabled item) + save/reload roundtrip
+        // 6b. Legacy 1.1.0 project (24000/1001, solo/lock, disabled item) -> migrates to 1.2.0 + save/reload roundtrip
         ave::Project v11 = ave::Project::load(fixtures_projects_dir / "valid_1_1_0.aveproj");
-        ASSERT_EQ(v11.schema_version(), "1.1.0");
+        ASSERT_EQ(v11.schema_version(), ave::Project::CURRENT_SCHEMA_VERSION);
+        ASSERT_EQ(v11.schema_version(), "1.2.0");
         ASSERT_EQ(v11.timeline().frame_rate(), ave::Rational(24000, 1001));
         ASSERT_EQ(v11.timeline().width(), 3840);
         ASSERT_EQ(v11.timeline().height(), 2160);
@@ -209,6 +211,8 @@ int main(int argc, char* argv[]) {
         ASSERT_TRUE(v11.timeline().video_tracks()[0].soloed());
         ASSERT_TRUE(v11.timeline().video_tracks()[0].locked());
         ASSERT_TRUE(v11.timeline().audio_tracks()[0].locked());
+        ASSERT_EQ(v11.media_pool().asset_count(), 0);
+        ASSERT_TRUE(v11.media_pool().find_bin(v11.media_pool().root_bin_id()) != nullptr);
 
         const auto* vitem = v11.timeline().find_item("vitem-110-1");
         ASSERT_TRUE(vitem != nullptr);
@@ -219,6 +223,7 @@ int main(int argc, char* argv[]) {
         ASSERT_TRUE(v11.save(rt_path));
         ave::Project v11_reloaded = ave::Project::load(rt_path);
         ASSERT_EQ(v11_reloaded.timeline(), v11.timeline());
+        ASSERT_EQ(v11_reloaded.media_pool(), v11.media_pool());
         ASSERT_EQ(v11_reloaded.id(), v11.id());
         ASSERT_EQ(v11_reloaded.name(), v11.name());
     }
@@ -341,6 +346,142 @@ int main(int argc, char* argv[]) {
         ave::Project reloaded_safe = ave::Project::load(guarded_file);
         ASSERT_EQ(reloaded_safe.name(), "Original Valid State");
         ASSERT_TRUE(reloaded_safe.timeline().find_item("dirty-1") == nullptr);
+    }
+
+    // 8. M1.2B MediaPool & MediaAsset Fixtures, Organization Round-Trip & Error Rejection
+    std::cout << "  Testing M1.2B MediaPool Persistence Fixtures & Invariants..." << std::endl;
+    {
+        // 8a. Valid 1.2.0 Project + Timeline + MediaPool (multi-asset, nested bins, subclips, color tags)
+        ave::Project p120 = ave::Project::load(fixtures_projects_dir / "valid_1_2_0.aveproj");
+        ASSERT_EQ(p120.schema_version(), "1.2.0");
+        ASSERT_EQ(p120.id(), "proj-valid-120");
+        ASSERT_EQ(p120.media_pool().asset_count(), 2u);
+        ASSERT_EQ(p120.media_pool().root_bin_id(), "bin-root-120");
+
+        const auto* cam = p120.media_pool().find_asset("asset-cam-a");
+        const auto* wav = p120.media_pool().find_asset("asset-boom-wav");
+        ASSERT_TRUE(cam != nullptr && wav != nullptr);
+        ASSERT_EQ(cam->file_path(), std::filesystem::path("D:\\Media\\Studio\\CamA_001.mov"));
+        ASSERT_EQ(cam->duration(), ave::Rational(1001, 10));
+        ASSERT_TRUE(cam->primary_video_stream() != nullptr);
+        ASSERT_EQ(cam->primary_video_stream()->video_info()->width, 3840);
+        ASSERT_EQ(cam->primary_video_stream()->video_info()->frame_rate, ave::Rational(24000, 1001));
+        ASSERT_TRUE(wav->primary_audio_stream() != nullptr);
+        ASSERT_EQ(wav->primary_audio_stream()->audio_info()->sample_rate, 96000);
+
+        // Verify nested bins and ordering
+        const auto* root_bin = p120.media_pool().find_bin("bin-root-120");
+        const auto* vid_bin = p120.media_pool().find_bin("bin-video-120");
+        const auto* int_bin = p120.media_pool().find_bin("bin-interviews-120");
+        const auto* broll_bin = p120.media_pool().find_bin("bin-broll-120");
+        ASSERT_TRUE(root_bin && vid_bin && int_bin && broll_bin);
+        ASSERT_EQ(root_bin->child_bin_ids().size(), 2u);
+        ASSERT_EQ(root_bin->child_bin_ids()[0], "bin-video-120");
+        ASSERT_EQ(root_bin->child_bin_ids()[1], "bin-audio-120");
+        ASSERT_EQ(vid_bin->parent_id(), "bin-root-120");
+        ASSERT_EQ(vid_bin->child_bin_ids().size(), 2u);
+        ASSERT_EQ(vid_bin->child_bin_ids()[0], "bin-interviews-120");
+        ASSERT_EQ(vid_bin->child_bin_ids()[1], "bin-broll-120");
+        ASSERT_EQ(int_bin->clip_ids().size(), 1u);
+        ASSERT_EQ(int_bin->clip_ids()[0], "mclip-sub-1");
+
+        // Verify subclips + color tags
+        const auto* sub1 = p120.media_pool().find_clip("mclip-sub-1");
+        const auto* sub2 = p120.media_pool().find_clip("mclip-sub-2");
+        const auto* sfx1 = p120.media_pool().find_clip("mclip-sfx-1");
+        ASSERT_TRUE(sub1 && sub2 && sfx1);
+        ASSERT_EQ(sub1->color_tag(), "Orange");
+        ASSERT_EQ(sub1->source_in(), ave::Rational(10, 1));
+        ASSERT_EQ(sub1->source_out(), ave::Rational(25, 1));
+        ASSERT_EQ(sub2->color_tag(), "Blue");
+        ASSERT_EQ(sub2->source_in(), ave::Rational(1001, 20));
+        ASSERT_EQ(sub2->source_out(), ave::Rational(1601, 20));
+        ASSERT_EQ(sfx1->color_tag(), "Green");
+
+        // Full save & reload round-trip equality across Project, Timeline, and MediaPool
+        const std::filesystem::path rt120 = std::filesystem::current_path() / "test_output" / "valid_120_rt.aveproj";
+        ASSERT_TRUE(p120.save(rt120));
+        ave::Project p120_rt = ave::Project::load(rt120);
+        ASSERT_EQ(p120_rt.id(), p120.id());
+        ASSERT_EQ(p120_rt.name(), p120.name());
+        ASSERT_EQ(p120_rt.schema_version(), "1.2.0");
+        ASSERT_EQ(p120_rt.timeline(), p120.timeline());
+        ASSERT_EQ(p120_rt.media_pool(), p120.media_pool());
+    }
+
+    {
+        // 8b. Unicode asset/clip/bin names & Windows backslash/quote/space paths
+        ave::Project p_uni = ave::Project::load(fixtures_projects_dir / "media_unicode_and_windows_paths.aveproj");
+        const auto* a = p_uni.media_pool().find_asset("asset-uni-win");
+        ASSERT_TRUE(a != nullptr);
+        const std::filesystem::path expected_win_path(
+            std::u8string(u8"D:\\Studio Projects\\Take \"A\"\\映像\\shot_01_最終_हिन्दी.mov"));
+        ASSERT_EQ(a->file_path().wstring(), expected_win_path.wstring());
+        ASSERT_EQ(a->display_name(), "Shot \"Alpha\" — 最終 (हिन्दी)\nTake 2");
+        ASSERT_EQ(p_uni.media_pool().find_clip("clip-uni-1")->name(), "Subclip \"A\"\\Cut\t— 映像");
+        ASSERT_EQ(p_uni.media_pool().find_bin("bin-uni-sub")->name(), "映像フォルダ — \"हिन्दी\"\\Dailies");
+
+        const std::filesystem::path rt_uni = std::filesystem::current_path() / "test_output" / "media_uni_rt.aveproj";
+        ASSERT_TRUE(p_uni.save(rt_uni));
+        ave::Project p_uni_rt = ave::Project::load(rt_uni);
+        ASSERT_EQ(p_uni_rt.timeline(), p_uni.timeline());
+        ASSERT_EQ(p_uni_rt.media_pool(), p_uni.media_pool());
+        ASSERT_EQ(p_uni_rt.media_pool().find_asset("asset-uni-win")->file_path().wstring(),
+                  expected_win_path.wstring());
+    }
+
+    {
+        // 8c. Missing optional media fields apply deterministic defaults & reconcile hierarchy
+        ave::Project p_opt = ave::Project::load(fixtures_projects_dir / "media_optional_fields_missing.aveproj");
+        ASSERT_EQ(p_opt.media_pool().root_bin_id(), "bin-root-opt");
+        ASSERT_EQ(p_opt.media_pool().asset_count(), 1u);
+        const auto* asset_opt = p_opt.media_pool().find_asset("asset-opt-1");
+        ASSERT_TRUE(asset_opt != nullptr);
+        ASSERT_EQ(asset_opt->display_name(), "minimal_clip.mp4");
+        ASSERT_EQ(asset_opt->container_format(), "unknown");
+        ASSERT_EQ(asset_opt->streams().size(), 1u);
+        ASSERT_EQ(asset_opt->streams()[0].type(), ave::StreamType::Video);
+        const auto* root_opt = p_opt.media_pool().find_bin("bin-root-opt");
+        ASSERT_TRUE(root_opt != nullptr);
+        ASSERT_EQ(root_opt->child_bin_ids().size(), 1u);
+        ASSERT_EQ(root_opt->child_bin_ids()[0], "bin-child-opt");
+        const auto* clip_opt = p_opt.media_pool().find_clip("clip-opt-1");
+        ASSERT_TRUE(clip_opt != nullptr);
+        ASSERT_EQ(clip_opt->color_tag(), "default");
+    }
+
+    {
+        // 8d. Legacy 1.0.0 and 1.1.0 without media_pool migrate deterministically to empty MediaPool
+        ave::Project l10_a = ave::Project::load(fixtures_projects_dir / "legacy_1_0_0_no_media.aveproj");
+        ave::Project l10_b = ave::Project::load(fixtures_projects_dir / "legacy_1_0_0_no_media.aveproj");
+        ASSERT_EQ(l10_a.schema_version(), "1.2.0");
+        ASSERT_EQ(l10_a.media_pool().asset_count(), 0u);
+        ASSERT_EQ(l10_a.media_pool(), l10_b.media_pool());
+        ASSERT_EQ(l10_a.to_json(), l10_b.to_json());
+
+        ave::Project l11_a = ave::Project::load(fixtures_projects_dir / "legacy_1_1_0_no_media.aveproj");
+        ave::Project l11_b = ave::Project::load(fixtures_projects_dir / "legacy_1_1_0_no_media.aveproj");
+        ASSERT_EQ(l11_a.schema_version(), "1.2.0");
+        ASSERT_EQ(l11_a.timeline().frame_rate(), ave::Rational(30000, 1001));
+        ASSERT_TRUE(l11_a.timeline().video_tracks()[0].locked());
+        ASSERT_EQ(l11_a.media_pool().asset_count(), 0u);
+        ASSERT_EQ(l11_a.media_pool(), l11_b.media_pool());
+    }
+
+    {
+        // 8e. Negative MediaPool fixture rejections
+        auto expect_load_fail = [](const std::filesystem::path& p) {
+            try {
+                (void)ave::Project::load(p);
+                return false;
+            } catch (const std::exception&) {
+                return true;
+            }
+        };
+        ASSERT_TRUE(expect_load_fail(fixtures_projects_dir / "media_missing_asset_ref.aveproj"));
+        ASSERT_TRUE(expect_load_fail(fixtures_projects_dir / "media_duplicate_asset_id.aveproj"));
+        ASSERT_TRUE(expect_load_fail(fixtures_projects_dir / "media_invalid_bin_cycle.aveproj"));
+        ASSERT_TRUE(expect_load_fail(fixtures_projects_dir / "media_malformed_pool.aveproj"));
     }
 
     // Clean up temporary files

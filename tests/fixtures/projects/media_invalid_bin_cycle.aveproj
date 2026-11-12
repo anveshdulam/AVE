@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.2.0",
+  "id": "proj-bin-cycle",
+  "name": "Invalid Bin Cycle",
+  "timeline": {
+    "id": "tl-cycle",
+    "frame_rate": { "num": 24, "den": 1 }
+  },
+  "media_pool": {
+    "root_bin_id": "bin-root",
+    "assets": [],
+    "clips": [],
+    "bins": [
+      {
+        "id": "bin-root",
+        "name": "Master Bin",
+        "parent_id": "",
+        "clip_ids": [],
+        "child_bin_ids": []
+      },
+      {
+        "id": "bin-a",
+        "name": "Bin A",
+        "parent_id": "bin-b",
+        "clip_ids": [],
+        "child_bin_ids": ["bin-b"]
+      },
+      {
+        "id": "bin-b",
+        "name": "Bin B",
+        "parent_id": "bin-a",
+        "clip_ids": [],
+        "child_bin_ids": ["bin-a"]
+      }
+    ]
+  }
+}
+
