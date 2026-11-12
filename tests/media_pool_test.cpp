@@ -261,6 +261,104 @@ int test_media_pool_json_roundtrip_hierarchy_and_validation() {
     return 0;
 }
 
+int test_m13a_media_pool_mutators_revisions_and_digest() {
+    ave::MediaPool pool;
+    int callback_count = 0;
+    const auto listener_id = pool.add_change_listener_with_id([&]() { ++callback_count; });
+
+    ASSERT_EQ(pool.mutation_revision(), 0u);
+    const uint64_t empty_digest = pool.content_digest();
+
+    // Register asset -> bumps revision & digest, notifies listener
+    ave::MediaAsset a1("asset-1", "D:/footage/cam1.mp4", "cam1.mp4", 4096, "mp4", ave::Rational{20, 1}, {});
+    pool.register_asset(a1);
+    ASSERT_EQ(pool.mutation_revision(), 1u);
+    ASSERT_EQ(callback_count, 1);
+    ASSERT_TRUE(pool.content_digest() != empty_digest);
+
+    // Re-register identical asset -> idempotent no-op (no bump, no notification)
+    const uint64_t rev_before_idem = pool.mutation_revision();
+    pool.register_asset(a1);
+    ASSERT_EQ(pool.mutation_revision(), rev_before_idem);
+    ASSERT_EQ(callback_count, 1);
+
+    // Bin creation, rename, move, cycle/root/self rejection, and no-op move
+    const std::string bin_a = pool.create_bin("Bin A");
+    const std::string bin_b = pool.create_bin("Bin B");
+    ASSERT_EQ(pool.mutation_revision(), 3u);
+    ASSERT_EQ(callback_count, 3);
+
+    ASSERT_TRUE(pool.rename_bin(bin_a, "Bin A")); // Same name -> no-op
+    ASSERT_EQ(pool.mutation_revision(), 3u);
+    ASSERT_TRUE(!pool.rename_bin(bin_a, "")); // Empty -> rejected
+    ASSERT_EQ(pool.mutation_revision(), 3u);
+    ASSERT_TRUE(pool.rename_bin(bin_a, "Dailies"));
+    ASSERT_EQ(pool.mutation_revision(), 4u);
+    ASSERT_EQ(pool.find_bin(bin_a)->name(), "Dailies");
+
+    ASSERT_TRUE(pool.move_bin(bin_b, pool.root_bin_id())); // Already under root -> no-op
+    ASSERT_EQ(pool.mutation_revision(), 4u);
+    ASSERT_TRUE(!pool.move_bin(pool.root_bin_id(), bin_a)); // Cannot move root
+    ASSERT_TRUE(!pool.move_bin(bin_a, bin_a)); // Self parent
+    ASSERT_EQ(pool.mutation_revision(), 4u);
+
+    ASSERT_TRUE(pool.move_bin(bin_b, bin_a));
+    ASSERT_EQ(pool.mutation_revision(), 5u);
+    ASSERT_TRUE(!pool.move_bin(bin_a, bin_b)); // Cycle A -> B -> A rejected
+    ASSERT_EQ(pool.mutation_revision(), 5u);
+
+    // Subclip creation & mutators
+    const std::string clip_id = pool.create_clip("asset-1", bin_b, "Shot 01");
+    ASSERT_EQ(pool.mutation_revision(), 6u);
+
+    // Invalid range must throw WITHOUT bumping revision
+    bool threw_invalid_range = false;
+    try {
+        (void)pool.set_clip_source_range(clip_id, ave::Rational{15, 1}, ave::Rational{5, 1});
+    } catch (const std::invalid_argument&) {
+        threw_invalid_range = true;
+    }
+    ASSERT_TRUE(threw_invalid_range);
+    ASSERT_EQ(pool.mutation_revision(), 6u);
+
+    ASSERT_TRUE(pool.set_clip_source_range(clip_id, ave::Rational{2, 1}, ave::Rational{12, 1}));
+    ASSERT_EQ(pool.mutation_revision(), 7u);
+    ASSERT_TRUE(pool.set_clip_source_range(clip_id, ave::Rational{2, 1}, ave::Rational{12, 1})); // Identical -> no-op
+    ASSERT_EQ(pool.mutation_revision(), 7u);
+
+    ASSERT_TRUE(pool.rename_clip(clip_id, "Shot 01 Hero"));
+    ASSERT_TRUE(pool.set_clip_color_tag(clip_id, "Amber"));
+    ASSERT_EQ(pool.mutation_revision(), 9u);
+
+    // Relink path checks: normalized same path is no-op; different path bumps
+    ASSERT_TRUE(pool.relink_asset_path("asset-1", "D:/footage/./cam1.mp4", 4096));
+    ASSERT_EQ(pool.mutation_revision(), 9u);
+    ASSERT_TRUE(pool.relink_asset_path("asset-1", "E:/archive/cam1.mp4", 8192));
+    ASSERT_EQ(pool.mutation_revision(), 10u);
+    ASSERT_EQ(pool.find_asset("asset-1")->file_size_bytes(), 8192u);
+
+    // Digest detects raw find_clip_mut() mutation even if caller didn't use pool method
+    const uint64_t digest_before_raw = pool.content_digest();
+    pool.find_clip_mut(clip_id)->set_color_tag("Violet");
+    ASSERT_TRUE(pool.content_digest() != digest_before_raw);
+
+    // Equality compares persisted domain state ONLY (ignores mutation_revision & listeners)
+    const ave::MediaPool rt = ave::MediaPool::from_json(pool.to_json());
+    ASSERT_EQ(rt.mutation_revision(), 0u);
+    ASSERT_EQ(rt, pool);
+    ASSERT_EQ(rt.content_digest(), pool.content_digest());
+
+    // remove_change_listener stops notifications; remove_asset removes dependent clips cleanly
+    pool.remove_change_listener(listener_id);
+    const int count_at_detach = callback_count;
+    ASSERT_TRUE(pool.remove_asset("asset-1"));
+    ASSERT_EQ(callback_count, count_at_detach);
+    ASSERT_EQ(pool.asset_count(), 0u);
+    ASSERT_TRUE(pool.find_clip(clip_id) == nullptr);
+
+    return 0;
+}
+
 int main() {
     std::cout << "Running MediaPool Unit Tests..." << std::endl;
 
@@ -278,6 +376,9 @@ int main() {
 
     if (test_media_pool_json_roundtrip_hierarchy_and_validation() != 0) return 1;
     std::cout << "  [PASS] test_media_pool_json_roundtrip_hierarchy_and_validation" << std::endl;
+
+    if (test_m13a_media_pool_mutators_revisions_and_digest() != 0) return 1;
+    std::cout << "  [PASS] test_m13a_media_pool_mutators_revisions_and_digest" << std::endl;
 
     std::cout << "All MediaPool tests passed successfully." << std::endl;
     return 0;

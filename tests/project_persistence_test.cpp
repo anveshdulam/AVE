@@ -484,6 +484,218 @@ int main(int argc, char* argv[]) {
         ASSERT_TRUE(expect_load_fail(fixtures_projects_dir / "media_malformed_pool.aveproj"));
     }
 
+    // 9. M1.3A Unified Dirty-State & Persistence Mutation Invariants
+    std::cout << "  Testing M1.3A Unified Dirty-State & Persistence Mutation Invariants..." << std::endl;
+    {
+        const std::filesystem::path m13a_dir = std::filesystem::current_path() / "test_output" / "m13a_dirty";
+        std::filesystem::remove_all(m13a_dir);
+        std::filesystem::create_directories(m13a_dir);
+
+        // 9a. Empty new project starts clean; change listener fires on semantic mutations
+        ave::Project p("M13A Clean Start");
+        int listener_hits = 0;
+        const auto p_lid = p.add_change_listener_with_id([&]() { ++listener_hits; });
+        ASSERT_FALSE(p.is_dirty());
+
+        // Same-name set_name is a no-op
+        p.set_name("M13A Clean Start");
+        ASSERT_FALSE(p.is_dirty());
+        ASSERT_EQ(listener_hits, 0);
+
+        // Real name change marks dirty & notifies
+        p.set_name("M13A Renamed");
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_EQ(listener_hits, 1);
+
+        // Failed timeline command on locked track must NOT flip clean -> dirty
+        const std::filesystem::path p_file = m13a_dir / "m13a.aveproj";
+        ASSERT_TRUE(p.save(p_file));
+        ASSERT_FALSE(p.is_dirty());
+
+        const std::string v1 = p.timeline().video_tracks()[0].id();
+        p.timeline_mut().find_track_mut(v1)->set_locked(true);
+        const int hits_before_locked = listener_hits;
+        const ave::TimelineItem locked_item("m13a-locked", "mc-locked", "ma-locked", "Rejected",
+                                            ave::Rational{0, 1}, ave::Rational{2, 1}, ave::Rational{0, 1});
+        ASSERT_FALSE(p.execute_command(std::make_unique<ave::InsertClipCommand>(v1, locked_item)).is_success());
+        ASSERT_FALSE(p.is_dirty());
+        ASSERT_EQ(listener_hits, hits_before_locked);
+        p.timeline_mut().find_track_mut(v1)->set_locked(false);
+
+        // 9b. MediaPool mutations mark clean project dirty + save clears dirty
+        const std::filesystem::path media_v1 = m13a_dir / "cam_v1.mp4";
+        const std::filesystem::path media_v2 = m13a_dir / "relocated" / "cam_v1.mp4";
+        std::filesystem::create_directories(media_v2.parent_path());
+        std::filesystem::copy_file(fixture_path, media_v1, std::filesystem::copy_options::overwrite_existing);
+
+        const ave::MediaAsset asset_a(
+            "asset-m13a-1", media_v1, "cam_v1.mp4",
+            std::filesystem::file_size(media_v1), "mp4", ave::Rational{4, 1}, {});
+        p.media_pool_mut().register_asset(asset_a);
+        ASSERT_TRUE(p.is_dirty());
+
+        // Idempotent re-register does not add extra notification after save
+        ASSERT_TRUE(p.save());
+        ASSERT_FALSE(p.is_dirty());
+        p.media_pool_mut().register_asset(asset_a);
+        ASSERT_FALSE(p.is_dirty());
+
+        // Bin create -> save -> rename -> save -> move -> save -> delete -> save
+        const std::string bin1 = p.media_pool_mut().create_bin("Scene 01");
+        const std::string bin2 = p.media_pool_mut().create_bin("Selects");
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_TRUE(p.save());
+        ASSERT_FALSE(p.is_dirty());
+
+        ASSERT_TRUE(p.media_pool_mut().rename_bin(bin1, "Scene 01 — Dailies"));
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_TRUE(p.save());
+        ASSERT_FALSE(p.is_dirty());
+
+        ASSERT_TRUE(p.media_pool_mut().move_bin(bin2, bin1));
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_TRUE(p.save());
+        ASSERT_FALSE(p.is_dirty());
+
+        // Subclip create, range update, rename, color tag, move -> dirty each time
+        const std::string sub1 = p.media_pool_mut().create_clip("asset-m13a-1", bin2, "Hero Take");
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_TRUE(p.save());
+        ASSERT_FALSE(p.is_dirty());
+
+        ASSERT_TRUE(p.media_pool_mut().set_clip_source_range(sub1, ave::Rational{1, 1}, ave::Rational{3, 1}));
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_TRUE(p.save());
+        ASSERT_FALSE(p.is_dirty());
+
+        ASSERT_TRUE(p.media_pool_mut().rename_clip(sub1, "Hero Take Cut"));
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_TRUE(p.save());
+        ASSERT_FALSE(p.is_dirty());
+
+        ASSERT_TRUE(p.media_pool_mut().set_clip_color_tag(sub1, "Cyan"));
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_TRUE(p.save());
+        ASSERT_FALSE(p.is_dirty());
+
+        ASSERT_TRUE(p.media_pool_mut().move_clip(sub1, bin1));
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_TRUE(p.save());
+        ASSERT_FALSE(p.is_dirty());
+
+        // Raw pointer mutator safety net via content_digest()
+        p.media_pool_mut().find_clip_mut(sub1)->set_color_tag("Gold");
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_TRUE(p.save());
+        ASSERT_FALSE(p.is_dirty());
+
+        // 9c. Relinking: same path is a no-op; missing path failure stays clean; path change marks dirty
+        ASSERT_TRUE(ave::AssetRelinker::relink_asset(p.media_pool_mut(), "asset-m13a-1", media_v1));
+        ASSERT_FALSE(p.is_dirty());
+        ASSERT_FALSE(ave::AssetRelinker::relink_asset(p.media_pool_mut(), "asset-m13a-1", m13a_dir / "missing.mp4"));
+        ASSERT_FALSE(p.is_dirty());
+
+        const ave::RelinkReport noop_report = ave::AssetRelinker::auto_relink_directory(p.media_pool_mut(), m13a_dir, true);
+        ASSERT_EQ(noop_report.total_checked, 0u);
+        ASSERT_FALSE(p.is_dirty());
+
+        std::filesystem::rename(media_v1, media_v2);
+        const ave::RelinkReport relinked_m13a = ave::AssetRelinker::auto_relink_directory(p.media_pool_mut(), media_v2.parent_path(), true);
+        ASSERT_EQ(relinked_m13a.relinked_count, 1u);
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_TRUE(p.save());
+        ASSERT_FALSE(p.is_dirty());
+
+        // Removing bin & removing asset mark dirty
+        ASSERT_TRUE(p.media_pool_mut().remove_bin(bin1));
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_TRUE(p.save());
+        ASSERT_FALSE(p.is_dirty());
+
+        ASSERT_TRUE(p.media_pool_mut().remove_asset("asset-m13a-1"));
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_TRUE(p.save());
+        ASSERT_FALSE(p.is_dirty());
+
+        // 9d. Pure CommandHistory undo/redo symmetry & save+undo/redo
+        const ave::TimelineItem cmd_item("m13a-cmd-1", "mc-cmd-1", "ma-cmd-1", "Cut 1",
+                                         ave::Rational{0, 1}, ave::Rational{2, 1}, ave::Rational{0, 1});
+        ASSERT_TRUE(p.execute_command(std::make_unique<ave::InsertClipCommand>(v1, cmd_item)).is_success());
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_TRUE(p.undo().is_success());
+        ASSERT_FALSE(p.is_dirty()); // Pure undo back to clean point restores clean state
+        ASSERT_TRUE(p.redo().is_success());
+        ASSERT_TRUE(p.is_dirty());
+
+        ASSERT_TRUE(p.save());
+        ASSERT_FALSE(p.is_dirty());
+        ASSERT_TRUE(p.undo().is_success()); // Undoing past saved point marks dirty
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_TRUE(p.redo().is_success()); // Redoing back to saved point restores clean
+        ASSERT_FALSE(p.is_dirty());
+
+        // 9e. Mixed non-history MediaPool edit + timeline command + undo must REMAIN dirty
+        p.media_pool_mut().register_asset(ave::MediaAsset(
+            "asset-m13a-2", media_v2, "cam_v1.mp4", 1024, "mp4", ave::Rational{4, 1}, {}));
+        ASSERT_TRUE(p.is_dirty());
+        const ave::TimelineItem cmd_item2("m13a-cmd-2", "mc-cmd-2", "asset-m13a-2", "Cut 2",
+                                          ave::Rational{3, 1}, ave::Rational{2, 1}, ave::Rational{0, 1});
+        ASSERT_TRUE(p.execute_command(std::make_unique<ave::InsertClipCommand>(v1, cmd_item2)).is_success());
+        ASSERT_TRUE(p.is_dirty());
+        ASSERT_TRUE(p.undo().is_success()); // Command history is back at clean_index_, BUT MediaPool has unsaved asset
+        ASSERT_TRUE(p.is_dirty());
+
+        // Failed save preserves dirty state
+        const std::filesystem::path bad_parent_file = m13a_dir / "blocker_file";
+        {
+            std::ofstream ofs(bad_parent_file, std::ios::out | std::ios::binary | std::ios::trunc);
+            ofs << "block";
+        }
+        ASSERT_FALSE(p.save(bad_parent_file / "cannot_save.aveproj"));
+        ASSERT_TRUE(p.is_dirty());
+
+        // Successful save clears dirty; Project::load() and Project::from_json() start clean
+        ASSERT_TRUE(p.save(p_file));
+        ASSERT_FALSE(p.is_dirty());
+        ave::Project reloaded_m13a = ave::Project::load(p_file);
+        ASSERT_FALSE(reloaded_m13a.is_dirty());
+        reloaded_m13a.set_name("Post-Load Rename");
+        ASSERT_TRUE(reloaded_m13a.is_dirty());
+
+        ave::Project migrated_m13a = ave::Project::load(fixtures_projects_dir / "legacy_1_0_0_no_media.aveproj");
+        ASSERT_FALSE(migrated_m13a.is_dirty());
+        migrated_m13a.media_pool_mut().create_bin("After Load Bin");
+        ASSERT_TRUE(migrated_m13a.is_dirty());
+
+        // 9f. Move constructor & move assignment preserve clean baseline and internal listener forwarding
+        int moved_listener_hits = 0;
+        p.remove_change_listener(p_lid);
+        ave::Project moved_ctor_proj(std::move(p));
+        ASSERT_FALSE(moved_ctor_proj.is_dirty());
+        (void)moved_ctor_proj.add_change_listener_with_id([&]() { ++moved_listener_hits; });
+        moved_ctor_proj.media_pool_mut().create_bin("After Move Ctor Bin");
+        ASSERT_TRUE(moved_ctor_proj.is_dirty());
+        ASSERT_EQ(moved_listener_hits, 1);
+
+        ave::Project moved_assign_proj("Target Before Assign");
+        moved_assign_proj = std::move(moved_ctor_proj);
+        ASSERT_TRUE(moved_assign_proj.is_dirty());
+        int assign_hits = 0;
+        (void)moved_assign_proj.add_change_listener_with_id([&]() { ++assign_hits; });
+        ASSERT_TRUE(moved_assign_proj.save(p_file));
+        ASSERT_FALSE(moved_assign_proj.is_dirty());
+        ASSERT_TRUE(assign_hits >= 1);
+        moved_assign_proj.set_name("Renamed After Move Assign");
+        ASSERT_TRUE(moved_assign_proj.is_dirty());
+
+        // Execute a timeline command after multiple Project moves (must invoke valid listener without dangling [this])
+        const std::string mv_v1 = moved_assign_proj.timeline().video_tracks()[0].id();
+        const ave::TimelineItem mv_item("m13a-mv-1", "mc-mv-1", "ma-mv-1", "Moved Cut",
+                                        ave::Rational{20, 1}, ave::Rational{2, 1}, ave::Rational{0, 1});
+        ASSERT_TRUE(moved_assign_proj.execute_command(std::make_unique<ave::InsertClipCommand>(mv_v1, mv_item)).is_success());
+        ASSERT_TRUE(moved_assign_proj.undo().is_success());
+    }
+
     // Clean up temporary files
     std::error_code ec;
     std::filesystem::remove_all(std::filesystem::current_path() / "test_output", ec);

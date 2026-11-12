@@ -2,6 +2,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <atomic>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -20,14 +22,142 @@ Project::Project(std::string id, std::string name, std::string schema_version)
       schema_version_(std::move(schema_version)),
       timeline_(),
       media_pool_(),
-      command_history_() {}
+      command_history_(),
+      clean_name_(name_),
+      clean_media_pool_revision_(media_pool_.mutation_revision()),
+      clean_media_pool_digest_(media_pool_.content_digest()) {
+    bind_internal_listeners();
+}
+
+Project::~Project() {
+    unbind_internal_listeners();
+}
+
+Project::Project(Project&& other)
+    : id_(std::move(other.id_)),
+      name_(std::move(other.name_)),
+      schema_version_(std::move(other.schema_version_)),
+      file_path_(std::move(other.file_path_)),
+      timeline_(std::move(other.timeline_)),
+      media_pool_(std::move(other.media_pool_)),
+      command_history_(std::move(other.command_history_)),
+      clean_name_(std::move(other.clean_name_)),
+      metadata_revision_(other.metadata_revision_),
+      clean_media_pool_revision_(other.clean_media_pool_revision_),
+      clean_media_pool_digest_(other.clean_media_pool_digest_) {
+    // Member initializers moved other's subobjects into this instance, so remove
+    // other's stale internal listener IDs from our moved-in subobjects first.
+    if (other.internal_history_listener_id_ != 0) {
+        command_history_.remove_change_listener(other.internal_history_listener_id_);
+        other.internal_history_listener_id_ = 0;
+    }
+    if (other.internal_pool_listener_id_ != 0) {
+        media_pool_.remove_change_listener(other.internal_pool_listener_id_);
+        other.internal_pool_listener_id_ = 0;
+    }
+    other.listeners_.clear();
+    bind_internal_listeners();
+}
+
+Project& Project::operator=(Project&& other) {
+    if (this == &other) {
+        return *this;
+    }
+    unbind_internal_listeners();
+    other.unbind_internal_listeners();
+
+    id_ = std::move(other.id_);
+    name_ = std::move(other.name_);
+    schema_version_ = std::move(other.schema_version_);
+    file_path_ = std::move(other.file_path_);
+    timeline_ = std::move(other.timeline_);
+    media_pool_ = std::move(other.media_pool_);
+    command_history_ = std::move(other.command_history_);
+    clean_name_ = std::move(other.clean_name_);
+    metadata_revision_ = other.metadata_revision_;
+    clean_media_pool_revision_ = other.clean_media_pool_revision_;
+    clean_media_pool_digest_ = other.clean_media_pool_digest_;
+    listeners_.clear();
+    other.listeners_.clear();
+
+    bind_internal_listeners();
+    return *this;
+}
+
+void Project::set_name(std::string name) {
+    if (name == name_) {
+        return;
+    }
+    name_ = std::move(name);
+    ++metadata_revision_;
+    notify_change_listeners();
+}
 
 bool Project::is_dirty() const noexcept {
-    return command_history_.is_dirty();
+    return command_history_.is_dirty() ||
+           name_ != clean_name_ ||
+           media_pool_.mutation_revision() != clean_media_pool_revision_ ||
+           media_pool_.content_digest() != clean_media_pool_digest_;
 }
 
 void Project::mark_clean() noexcept {
+    clean_name_ = name_;
+    clean_media_pool_revision_ = media_pool_.mutation_revision();
+    clean_media_pool_digest_ = media_pool_.content_digest();
     command_history_.mark_clean();
+}
+
+uint64_t Project::semantic_mutation_revision() const noexcept {
+    return command_history_.mutation_revision() +
+           media_pool_.mutation_revision() +
+           metadata_revision_;
+}
+
+Project::ListenerId Project::add_change_listener_with_id(ChangeListener listener) {
+    static std::atomic<ListenerId> s_next_project_listener_id{1};
+    const ListenerId id = s_next_project_listener_id.fetch_add(1, std::memory_order_relaxed);
+    listeners_.push_back(ListenerEntry{id, std::move(listener)});
+    return id;
+}
+
+void Project::remove_change_listener(ListenerId id) {
+    if (id == 0) {
+        return;
+    }
+    listeners_.erase(
+        std::remove_if(listeners_.begin(), listeners_.end(),
+            [id](const ListenerEntry& entry) { return entry.id == id; }),
+        listeners_.end());
+}
+
+void Project::bind_internal_listeners() {
+    unbind_internal_listeners();
+    internal_history_listener_id_ = command_history_.add_change_listener_with_id([this]() {
+        notify_change_listeners();
+    });
+    internal_pool_listener_id_ = media_pool_.add_change_listener_with_id([this]() {
+        notify_change_listeners();
+    });
+}
+
+void Project::unbind_internal_listeners() noexcept {
+    if (internal_history_listener_id_ != 0) {
+        command_history_.remove_change_listener(internal_history_listener_id_);
+        internal_history_listener_id_ = 0;
+    }
+    if (internal_pool_listener_id_ != 0) {
+        media_pool_.remove_change_listener(internal_pool_listener_id_);
+        internal_pool_listener_id_ = 0;
+    }
+}
+
+void Project::notify_change_listeners() {
+    const auto listeners_copy = listeners_;
+    for (const auto& entry : listeners_copy) {
+        if (entry.callback) {
+            entry.callback();
+        }
+    }
 }
 
 CommandResult Project::execute_command(std::unique_ptr<Command> cmd) {
@@ -123,6 +253,8 @@ Project Project::from_json(const std::string& json_text) {
     Project proj(std::move(id), std::move(name), CURRENT_SCHEMA_VERSION);
     proj.timeline_ = std::move(parsed_timeline);
     proj.media_pool_ = std::move(parsed_pool);
+    proj.bind_internal_listeners();
+    proj.mark_clean();
     return proj;
 }
 

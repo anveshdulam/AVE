@@ -4,6 +4,7 @@
 #include "ave/timeline_snapping.hpp"
 #include "ave/timeline_viewport.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -184,9 +185,9 @@ signals:
     void projectReloaded();
 
 private:
-    void bind_history_listener();
-    void unbind_history_listener();
-    void sync_from_project(bool emit_reload_signal = false);
+    void bind_project_listener();
+    void unbind_project_listener();
+    void sync_from_project(bool emit_reload_signal = false, bool force_rebuild = false);
     void rebuild_models();
     [[nodiscard]] QVariantList build_waveform_peaks(const std::string& asset_id,
                                                       double source_in_sec,
@@ -196,7 +197,8 @@ private:
     ave::Project& project_;
     ave::ProjectSnapshotCoordinator* snapshot_coordinator_{nullptr};
     std::shared_ptr<ave::MediaCache> media_cache_{};
-    ave::CommandHistory::ListenerId history_listener_id_{0};
+    uint64_t project_listener_id_{0};
+    uint64_t last_command_revision_{0};
 
     TimelineTrackListModel* tracks_model_{nullptr};
     TimelineClipListModel* clips_model_{nullptr};

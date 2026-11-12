@@ -208,13 +208,14 @@ TimelineModel::TimelineModel(ave::Project& project,
     is_dirty_ = project_.is_dirty();
     project_name_ = QString::fromStdString(project_.name());
     project_file_path_ = QString::fromStdWString(project_.file_path().wstring());
+    last_command_revision_ = project_.command_history().mutation_revision();
 
     rebuild_models();
-    bind_history_listener();
+    bind_project_listener();
 }
 
 TimelineModel::~TimelineModel() {
-    unbind_history_listener();
+    unbind_project_listener();
 }
 
 int TimelineModel::trackCount() const noexcept {
@@ -592,7 +593,7 @@ bool TimelineModel::saveProject(const QString& filePath) {
     }
 
     if (ok) {
-        sync_from_project(false);
+        sync_from_project(false, false);
     }
     return ok;
 }
@@ -670,25 +671,30 @@ void TimelineModel::set_media_cache(std::shared_ptr<ave::MediaCache> cache) {
     rebuild_models();
 }
 
-void TimelineModel::bind_history_listener() {
-    unbind_history_listener();
+void TimelineModel::bind_project_listener() {
+    unbind_project_listener();
+    last_command_revision_ = project_.command_history().mutation_revision();
     QPointer<TimelineModel> self(this);
-    history_listener_id_ = project_.command_history_mut().add_change_listener_with_id([self]() {
+    project_listener_id_ = project_.add_change_listener_with_id([self]() {
         if (self.isNull()) {
             return;
         }
-        self->sync_from_project(false);
+        self->sync_from_project(false, false);
     });
 }
 
-void TimelineModel::unbind_history_listener() {
-    if (history_listener_id_ != 0) {
-        project_.command_history_mut().remove_change_listener(history_listener_id_);
-        history_listener_id_ = 0;
+void TimelineModel::unbind_project_listener() {
+    if (project_listener_id_ != 0) {
+        project_.remove_change_listener(project_listener_id_);
+        project_listener_id_ = 0;
     }
 }
 
-void TimelineModel::sync_from_project(bool emit_reload_signal) {
+void TimelineModel::sync_from_project(bool emit_reload_signal, bool force_rebuild) {
+    const uint64_t cmd_rev = project_.command_history().mutation_revision();
+    const bool commands_changed = (cmd_rev != last_command_revision_);
+    last_command_revision_ = cmd_rev;
+
     const ave::Timeline& tl = project_.timeline();
     const int next_track_count = static_cast<int>(tl.video_tracks().size() + tl.audio_tracks().size());
     const double next_dur = tl.duration().to_seconds();
@@ -719,7 +725,9 @@ void TimelineModel::sync_from_project(bool emit_reload_signal) {
     project_name_ = next_name;
     project_file_path_ = next_path;
 
-    rebuild_models();
+    if (force_rebuild || emit_reload_signal || commands_changed) {
+        rebuild_models();
+    }
 
     if (tracks_changed) {
         emit trackCountChanged();
@@ -873,7 +881,7 @@ QVariantList TimelineModel::build_waveform_peaks(const std::string& asset_id,
 }
 
 bool TimelineModel::replace_active_project(ave::Project next_project) {
-    unbind_history_listener();
+    unbind_project_listener();
     const bool had_selection = !selected_clip_id_.isEmpty();
     selected_clip_id_.clear();
 
@@ -883,8 +891,8 @@ bool TimelineModel::replace_active_project(ave::Project next_project) {
         project_ = std::move(next_project);
     }
 
-    bind_history_listener();
-    sync_from_project(false);
+    bind_project_listener();
+    sync_from_project(false, true);
 
     if (had_selection) {
         emit selectedClipIdChanged();

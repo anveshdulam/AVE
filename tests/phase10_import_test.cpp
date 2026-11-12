@@ -854,6 +854,93 @@ TEST(Phase10ImportTest, CompletedImportRepublishesSnapshotForPlaybackSession) {
     session.shutdown();
 }
 
+TEST(Phase10ImportTest, ImportDirtyTrackingSuccessFailureAndCacheIsolation) {
+    const std::filesystem::path sample = fixture_file("sample_test.mp4");
+    ASSERT_TRUE(std::filesystem::exists(sample)) << "Missing fixture: " << sample;
+
+    ave::Project project("M13A Import Dirty Test");
+    EXPECT_FALSE(project.is_dirty());
+
+    int project_notify_count = 0;
+    const auto listener_id = project.add_change_listener_with_id([&]() { ++project_notify_count; });
+
+    const std::filesystem::path tmp_root =
+        std::filesystem::temp_directory_path() / "ave_m13a_import_dirty_test";
+    std::error_code ec;
+    std::filesystem::remove_all(tmp_root, ec);
+    std::filesystem::create_directories(tmp_root);
+
+    auto cache = std::make_shared<ave::MediaCache>(tmp_root / "cache");
+    cache->clear();
+    auto queue = std::make_shared<ave::MediaImportQueue>();
+    ave::desktop::MediaPoolModel model(project, queue, nullptr, cache);
+
+    // 1. Failed import must keep empty project clean and produce no project mutation notification
+    const QString missing_job = model.importMediaFile(
+        QString::fromStdWString((tmp_root / "definitely_missing_media.mp4").wstring()));
+    ASSERT_FALSE(missing_job.isEmpty());
+    ASSERT_TRUE(pump_events_until([&]() { return !model.isImporting(); }));
+    EXPECT_EQ(model.assetCount(), 0);
+    EXPECT_FALSE(project.is_dirty());
+    EXPECT_EQ(project_notify_count, 0);
+
+    // 2. Cancelled import must keep project clean
+    const QString cancel_job = model.importMediaFile(QString::fromStdWString(sample.wstring()));
+    ASSERT_FALSE(cancel_job.isEmpty());
+    model.cancelImport(cancel_job);
+    ASSERT_TRUE(pump_events_until([&]() { return !model.isImporting(); }));
+    EXPECT_EQ(model.assetCount(), 0);
+    EXPECT_FALSE(project.is_dirty());
+    EXPECT_EQ(project_notify_count, 0);
+
+    // 3. Successful real import marks Project dirty & notifies listeners
+    const QString ok_job = model.importMediaFile(QString::fromStdWString(sample.wstring()));
+    ASSERT_FALSE(ok_job.isEmpty());
+    ASSERT_TRUE(pump_events_until([&]() {
+        return model.assetCount() == 1 && !model.isImporting();
+    }));
+    EXPECT_TRUE(project.is_dirty());
+    EXPECT_GE(project_notify_count, 1);
+
+    const std::string asset_id =
+        model.data(model.index(0, 0), ave::desktop::MediaPoolModel::AssetIdRole).toString().toStdString();
+    ASSERT_FALSE(asset_id.empty());
+
+    // 4. Saving clears dirty; MediaCache writes + reloadFromProject() must NOT re-dirty the project
+    const std::filesystem::path proj_path = tmp_root / "imported_proj.aveproj";
+    ASSERT_TRUE(project.save(proj_path));
+    EXPECT_FALSE(project.is_dirty());
+    const int notifies_after_save = project_notify_count;
+
+    ave::ThumbnailData thumb;
+    thumb.width = 4;
+    thumb.height = 4;
+    thumb.timestamp = ave::Rational{0, 1};
+    thumb.rgba_pixels.assign(static_cast<std::size_t>(4 * 4 * 4), 128);
+    cache->store_thumbnail(asset_id, ave::Rational{0, 1}, 4, 4, std::move(thumb));
+
+    ave::WaveformData wf;
+    wf.channels = 1;
+    wf.sample_rate = 48000;
+    wf.peaks_per_second = 10;
+    wf.duration = ave::Rational{1, 1};
+    wf.channel_peaks.resize(1);
+    wf.channel_peaks[0].min_peaks.assign(10, -0.5f);
+    wf.channel_peaks[0].max_peaks.assign(10, 0.5f);
+    cache->store_waveform(asset_id, std::move(wf));
+    EXPECT_GE(cache->thumbnail_count(), 1u);
+    EXPECT_TRUE(cache->get_thumbnail(asset_id, ave::Rational{0, 1}, 4, 4).has_value());
+    EXPECT_EQ(cache->waveform_count(), 1u);
+
+    model.reloadFromProject();
+    EXPECT_FALSE(project.is_dirty());
+    EXPECT_EQ(project_notify_count, notifies_after_save);
+
+    project.remove_change_listener(listener_id);
+    model.shutdown();
+    std::filesystem::remove_all(tmp_root, ec);
+}
+
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     ::testing::InitGoogleTest(&argc, argv);

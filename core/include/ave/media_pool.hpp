@@ -4,11 +4,14 @@
 #include "ave/time.hpp"
 #include "ave/uuid.hpp"
 
-#include <string>
-#include <vector>
-#include <unordered_map>
+#include <cstdint>
+#include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace ave {
 
@@ -87,13 +90,24 @@ private:
  */
 class MediaPool {
 public:
+    using ChangeListener = std::function<void()>;
+    using ListenerId = uint64_t;
+
     MediaPool();
+    MediaPool(const MediaPool& other);
+    MediaPool& operator=(const MediaPool& other);
+    MediaPool(MediaPool&& other) noexcept;
+    MediaPool& operator=(MediaPool&& other) noexcept;
+    ~MediaPool() = default;
 
     // Asset Management
     const MediaAsset& register_asset(MediaAsset asset);
     [[nodiscard]] const MediaAsset* find_asset(const std::string& asset_id) const noexcept;
     MediaAsset* find_asset_mut(const std::string& asset_id) noexcept;
     bool remove_asset(const std::string& asset_id);
+    bool relink_asset_path(const std::string& asset_id,
+                           const std::filesystem::path& new_path,
+                           std::optional<uint64_t> file_size_bytes = std::nullopt);
     [[nodiscard]] size_t asset_count() const noexcept { return assets_.size(); }
     [[nodiscard]] const std::unordered_map<std::string, MediaAsset>& assets() const noexcept { return assets_; }
 
@@ -102,6 +116,8 @@ public:
     std::string create_bin(const std::string& name, const std::string& parent_bin_id = "");
     [[nodiscard]] const MediaBin* find_bin(const std::string& bin_id) const noexcept;
     MediaBin* find_bin_mut(const std::string& bin_id) noexcept;
+    bool rename_bin(const std::string& bin_id, const std::string& new_name);
+    bool move_bin(const std::string& bin_id, const std::string& new_parent_bin_id);
     bool remove_bin(const std::string& bin_id);
 
     // Clip Management
@@ -110,23 +126,42 @@ public:
                             std::optional<std::string> custom_name = std::nullopt);
     [[nodiscard]] const MediaClip* find_clip(const std::string& clip_id) const noexcept;
     MediaClip* find_clip_mut(const std::string& clip_id) noexcept;
+    bool rename_clip(const std::string& clip_id, const std::string& new_name);
+    bool set_clip_source_range(const std::string& clip_id, Rational in_point, Rational out_point);
+    bool set_clip_color_tag(const std::string& clip_id, const std::string& color_tag);
     bool move_clip(const std::string& clip_id, const std::string& destination_bin_id);
     bool remove_clip(const std::string& clip_id);
 
     // Search & Query
     [[nodiscard]] std::vector<const MediaClip*> search_clips(const std::string& query) const;
 
+    // Mutation tracking & Change Listeners
+    [[nodiscard]] uint64_t mutation_revision() const noexcept { return mutation_revision_; }
+    [[nodiscard]] uint64_t content_digest() const noexcept;
+    ListenerId add_change_listener_with_id(ChangeListener listener);
+    void remove_change_listener(ListenerId id);
+
     // Serialization
     [[nodiscard]] std::string to_json() const;
     [[nodiscard]] static MediaPool from_json(const std::string& json_text);
 
-    [[nodiscard]] bool operator==(const MediaPool& other) const = default;
+    [[nodiscard]] bool operator==(const MediaPool& other) const;
 
 private:
+    struct ListenerEntry {
+        ListenerId id{0};
+        ChangeListener callback;
+    };
+
+    void bump_mutation();
+    void notify_listeners();
+
     std::string root_bin_id_{"root"};
     std::unordered_map<std::string, MediaAsset> assets_{};
     std::unordered_map<std::string, MediaBin> bins_{};
     std::unordered_map<std::string, MediaClip> clips_{};
+    uint64_t mutation_revision_{0};
+    std::vector<ListenerEntry> listeners_{};
 };
 
 } // namespace ave

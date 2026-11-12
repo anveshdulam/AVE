@@ -1,5 +1,6 @@
 #include "ave/asset_relinker.hpp"
 
+#include <optional>
 #include <unordered_map>
 #include <algorithm>
 #include <cctype>
@@ -44,18 +45,23 @@ bool AssetRelinker::relink_asset(MediaPool& pool,
         return false;
     }
 
-    MediaAsset* asset = pool.find_asset_mut(asset_id);
+    const MediaAsset* asset = pool.find_asset(asset_id);
     if (!asset) {
         return false;
     }
 
-    asset->set_file_path(new_path);
-    uint64_t sz = std::filesystem::file_size(new_path, ec);
-    if (!ec) {
-        asset->set_file_size_bytes(sz);
+    if (asset->file_path() == new_path ||
+        asset->file_path().lexically_normal() == new_path.lexically_normal()) {
+        return true; // Stored path unchanged -> no-op relink
     }
 
-    return true;
+    std::optional<uint64_t> file_size;
+    const uint64_t sz = std::filesystem::file_size(new_path, ec);
+    if (!ec) {
+        file_size = sz;
+    }
+
+    return pool.relink_asset_path(asset_id, new_path, file_size);
 }
 
 RelinkReport AssetRelinker::auto_relink_directory(MediaPool& pool,

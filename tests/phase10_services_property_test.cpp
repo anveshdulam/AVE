@@ -318,6 +318,8 @@ TEST(Phase10ServicesPropertyTest, TimelineModelModelsSelectionSnappingAndCommand
         "asset-silent", "MOS_Plate.mp4", tmp.path / "mos_plate.mp4", ave::Rational{2, 1});
     project.media_pool_mut().register_asset(cached_asset);
     project.media_pool_mut().register_asset(silent_asset);
+    // Setup fixture assets belong to the baseline state before testing dirty transitions.
+    project.mark_clean();
     cache->store_waveform("asset-cached", make_synthetic_waveform(ave::Rational{4, 1}));
 
     ave::desktop::TimelineModel model(project, nullptr, nullptr, cache);
@@ -804,6 +806,198 @@ TEST(Phase10ServicesPropertyTest, PlaybackSnapshotRepublishAndConcurrentReaderSa
 
     EXPECT_GT(reads_completed.load(), 0u);
     EXPECT_GT(store->current_version(), initial_version);
+
+    coordinator.unbind();
+    pool_model.shutdown();
+    session.shutdown();
+    hub->shutdown();
+}
+
+TEST(Phase10ServicesPropertyTest, M13AUnifiedDirtyTrackingDesktopIntegration) {
+    ScopedTempDir tmp("ave_m13a_desktop");
+    const std::filesystem::path sample = fixture_file("sample_test.mp4");
+    ASSERT_TRUE(std::filesystem::exists(sample)) << "Missing fixture: " << sample;
+
+    ave::Project project("Desktop Dirty Integration");
+    auto store = std::make_shared<ave::PlaybackSnapshotStore>(project.timeline(), project.media_pool());
+    auto hub = std::make_shared<ave::FramePresentationHub>();
+    ave::PlaybackSession session(store, ave::PlaybackSessionConfig{}, hub);
+    ave::ProjectSnapshotCoordinator coordinator(project, store, &session);
+
+    auto cache = std::make_shared<ave::MediaCache>(tmp.path / "cache");
+    auto queue = std::make_shared<ave::MediaImportQueue>();
+    ave::desktop::MediaPoolModel pool_model(project, queue, nullptr, cache);
+    ave::desktop::TimelineModel timeline_model(project, nullptr, &coordinator, cache);
+
+    QObject::connect(&pool_model, &ave::desktop::MediaPoolModel::projectMediaMutated, &pool_model,
+                     [&coordinator]() { coordinator.notify_media_mutated(); });
+    QObject::connect(&timeline_model, &ave::desktop::TimelineModel::projectReloaded,
+                     &pool_model, &ave::desktop::MediaPoolModel::reloadFromProject);
+
+    QSignalSpy project_state_spy(&timeline_model, &ave::desktop::TimelineModel::projectStateChanged);
+
+    // 1. Clean start & transient UI state changes do NOT mark dirty
+    EXPECT_FALSE(project.is_dirty());
+    EXPECT_FALSE(timeline_model.isDirty());
+    timeline_model.setActiveTool(static_cast<int>(ave::desktop::TimelineModel::Tool::Razor));
+    timeline_model.setSnappingEnabled(false);
+    timeline_model.setZoomFactor(2.5);
+    EXPECT_FALSE(project.is_dirty());
+    EXPECT_FALSE(timeline_model.isDirty());
+    EXPECT_EQ(project_state_spy.count(), 0);
+
+    // 2. Direct PlaybackSnapshotStore::publish & notify_media_mutated without real edit do NOT dirty
+    const uint64_t snap_v0 = store->current_version();
+    (void)store->publish(project.timeline(), project.media_pool());
+    coordinator.notify_media_mutated();
+    EXPECT_GT(store->current_version(), snap_v0);
+    EXPECT_FALSE(project.is_dirty());
+    EXPECT_FALSE(timeline_model.isDirty());
+    EXPECT_EQ(project_state_spy.count(), 0);
+
+    // 3. Real import through MediaPoolModel marks BOTH Project and TimelineModel::isDirty + emits projectStateChanged
+    const std::filesystem::path clip_v1 = tmp.path / "desk_clip_v1.mp4";
+    std::filesystem::copy_file(sample, clip_v1, std::filesystem::copy_options::overwrite_existing);
+
+    const QString import_job = pool_model.importMediaFile(QString::fromStdWString(clip_v1.wstring()));
+    ASSERT_FALSE(import_job.isEmpty());
+    const auto wait_start = std::chrono::steady_clock::now();
+    while ((pool_model.assetCount() < 1 || pool_model.isImporting()) &&
+           (std::chrono::steady_clock::now() - wait_start) < std::chrono::seconds(5)) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_EQ(pool_model.assetCount(), 1);
+    EXPECT_TRUE(project.is_dirty());
+    EXPECT_TRUE(timeline_model.isDirty());
+    EXPECT_GE(project_state_spy.count(), 1);
+
+    const QString imported_asset_id =
+        pool_model.data(pool_model.index(0, 0), ave::desktop::MediaPoolModel::AssetIdRole).toString();
+    ASSERT_FALSE(imported_asset_id.isEmpty());
+
+    // 4. Failed saveProject preserves isDirty; successful saveProject clears BOTH Project::is_dirty & TimelineModel::isDirty
+    const std::filesystem::path blocker = tmp.path / "file_blocker";
+    {
+        std::ofstream ofs(blocker, std::ios::out | std::ios::binary | std::ios::trunc);
+        ofs << "block";
+    }
+    EXPECT_FALSE(timeline_model.saveProject(QString::fromStdWString((blocker / "bad.aveproj").wstring())));
+    EXPECT_TRUE(project.is_dirty());
+    EXPECT_TRUE(timeline_model.isDirty());
+
+    const std::filesystem::path proj_path = tmp.path / "desktop_m13a.aveproj";
+    ASSERT_TRUE(timeline_model.saveProject(QString::fromStdWString(proj_path.wstring())));
+    EXPECT_FALSE(project.is_dirty());
+    EXPECT_FALSE(timeline_model.isDirty());
+
+    // 5. Rejected locked-track TimelineModel actions & invalid UI requests do NOT mark dirty
+    const std::string v1_id = project.timeline().video_tracks()[0].id();
+    project.timeline_mut().find_track_mut(v1_id)->set_locked(true);
+    EXPECT_FALSE(timeline_model.insertClipFromAsset(imported_asset_id, QString::fromStdString(v1_id), 0.0));
+    EXPECT_FALSE(project.is_dirty());
+    EXPECT_FALSE(timeline_model.isDirty());
+    project.timeline_mut().find_track_mut(v1_id)->set_locked(false);
+
+    // 6. MediaPool bin/subclip edits & Project::set_name propagate to TimelineModel::isDirty
+    const int dirty_sig_before_bin = project_state_spy.count();
+    const std::string b_dailies = project.media_pool_mut().create_bin("Dailies");
+    EXPECT_TRUE(timeline_model.isDirty());
+    EXPECT_GT(project_state_spy.count(), dirty_sig_before_bin);
+    ASSERT_TRUE(timeline_model.saveProject());
+    EXPECT_FALSE(timeline_model.isDirty());
+
+    EXPECT_TRUE(project.media_pool_mut().rename_bin(b_dailies, "Day 01"));
+    EXPECT_TRUE(timeline_model.isDirty());
+    ASSERT_TRUE(timeline_model.saveProject());
+    EXPECT_FALSE(timeline_model.isDirty());
+
+    project.set_name("Desktop Dirty Renamed");
+    EXPECT_TRUE(timeline_model.isDirty());
+    EXPECT_EQ(timeline_model.projectName(), QStringLiteral("Desktop Dirty Renamed"));
+    ASSERT_TRUE(timeline_model.saveProject());
+    EXPECT_FALSE(timeline_model.isDirty());
+
+    // 7. Relink via ProjectSnapshotCoordinator: no-op directory & same-path stay clean; real path change marks dirty
+    const ave::RelinkReport noop_relink = coordinator.auto_relink_directory(tmp.path, true);
+    EXPECT_EQ(noop_relink.total_checked, 0u);
+    EXPECT_FALSE(project.is_dirty());
+    EXPECT_FALSE(timeline_model.isDirty());
+
+    EXPECT_TRUE(coordinator.relink_asset(imported_asset_id.toStdString(), clip_v1));
+    EXPECT_FALSE(project.is_dirty());
+    EXPECT_FALSE(timeline_model.isDirty());
+
+    const std::filesystem::path clip_v2 = tmp.path / "relocated" / "desk_clip_v1.mp4";
+    std::filesystem::create_directories(clip_v2.parent_path());
+    std::filesystem::rename(clip_v1, clip_v2);
+    ASSERT_TRUE(coordinator.relink_asset(imported_asset_id.toStdString(), clip_v2));
+    EXPECT_TRUE(project.is_dirty());
+    EXPECT_TRUE(timeline_model.isDirty());
+    ASSERT_TRUE(timeline_model.saveProject());
+    EXPECT_FALSE(timeline_model.isDirty());
+
+    // 8. Cache writes + reloadFromProject do NOT dirty clean project
+    ave::ThumbnailData td;
+    td.width = 4;
+    td.height = 4;
+    td.timestamp = ave::Rational{0, 1};
+    td.rgba_pixels.assign(static_cast<std::size_t>(4 * 4 * 4), 200);
+    cache->store_thumbnail(imported_asset_id.toStdString(), ave::Rational{0, 1}, 4, 4, std::move(td));
+    EXPECT_GE(cache->thumbnail_count(), 1u);
+    EXPECT_TRUE(cache->get_thumbnail(imported_asset_id.toStdString(), ave::Rational{0, 1}, 4, 4).has_value());
+    pool_model.reloadFromProject();
+    EXPECT_FALSE(project.is_dirty());
+    EXPECT_FALSE(timeline_model.isDirty());
+
+    // 9. Mixed MediaPool + Timeline command undo through TimelineModel keeps isDirty = true until saved
+    const std::string sub_id = project.media_pool_mut().create_clip(
+        imported_asset_id.toStdString(), b_dailies, "Hero Subclip");
+    ASSERT_FALSE(sub_id.empty());
+    EXPECT_TRUE(timeline_model.isDirty());
+
+    ASSERT_TRUE(timeline_model.insertClipFromAsset(imported_asset_id, QString::fromStdString(v1_id), 0.0));
+    EXPECT_TRUE(timeline_model.canUndo());
+    EXPECT_TRUE(timeline_model.isDirty());
+    ASSERT_TRUE(timeline_model.undo());
+    EXPECT_FALSE(timeline_model.canUndo());
+    EXPECT_TRUE(timeline_model.isDirty()); // Unsaved subclip remains dirty!
+
+    ASSERT_TRUE(timeline_model.saveProject());
+    EXPECT_FALSE(timeline_model.isDirty());
+
+    // Pure command -> save -> undo -> redo symmetry on TimelineModel
+    ASSERT_TRUE(timeline_model.insertClipFromAsset(imported_asset_id, QString::fromStdString(v1_id), 0.0));
+    EXPECT_TRUE(timeline_model.isDirty());
+    ASSERT_TRUE(timeline_model.undo());
+    EXPECT_FALSE(timeline_model.isDirty());
+    ASSERT_TRUE(timeline_model.redo());
+    EXPECT_TRUE(timeline_model.isDirty());
+    ASSERT_TRUE(timeline_model.saveProject());
+    EXPECT_FALSE(timeline_model.isDirty());
+
+    // 10. newProject & openProject start clean, and post-open edit marks dirty again
+    ASSERT_TRUE(timeline_model.newProject(QStringLiteral("Fresh Clean")));
+    EXPECT_FALSE(project.is_dirty());
+    EXPECT_FALSE(timeline_model.isDirty());
+    EXPECT_EQ(pool_model.assetCount(), 0);
+
+    ASSERT_TRUE(timeline_model.openProject(QString::fromStdWString(proj_path.wstring())));
+    EXPECT_FALSE(project.is_dirty());
+    EXPECT_FALSE(timeline_model.isDirty());
+    EXPECT_EQ(pool_model.assetCount(), 1);
+    EXPECT_EQ(timeline_model.clipsModel()->rowCount(), 1);
+
+    // Selecting clip after open does NOT dirty; mutating does
+    const QString opened_clip_id = timeline_model.clipsModel()->data(
+        timeline_model.clipsModel()->index(0, 0),
+        ave::desktop::TimelineClipListModel::ClipIdRole).toString();
+    timeline_model.setSelectedClipId(opened_clip_id);
+    EXPECT_FALSE(timeline_model.isDirty());
+
+    EXPECT_TRUE(project.media_pool_mut().set_clip_color_tag(sub_id, "Rose"));
+    EXPECT_TRUE(project.is_dirty());
+    EXPECT_TRUE(timeline_model.isDirty());
 
     coordinator.unbind();
     pool_model.shutdown();

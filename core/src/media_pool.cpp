@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <stdexcept>
 #include <unordered_map>
@@ -79,9 +80,64 @@ MediaPool::MediaPool() {
     bins_[root_bin_id_] = MediaBin(root_bin_id_, "Master Bin", "");
 }
 
+MediaPool::MediaPool(const MediaPool& other)
+    : root_bin_id_(other.root_bin_id_),
+      assets_(other.assets_),
+      bins_(other.bins_),
+      clips_(other.clips_),
+      mutation_revision_(other.mutation_revision_) {}
+
+MediaPool& MediaPool::operator=(const MediaPool& other) {
+    if (this == &other) {
+        return *this;
+    }
+    root_bin_id_ = other.root_bin_id_;
+    assets_ = other.assets_;
+    bins_ = other.bins_;
+    clips_ = other.clips_;
+    mutation_revision_ = other.mutation_revision_;
+    listeners_.clear();
+    return *this;
+}
+
+MediaPool::MediaPool(MediaPool&& other) noexcept
+    : root_bin_id_(std::move(other.root_bin_id_)),
+      assets_(std::move(other.assets_)),
+      bins_(std::move(other.bins_)),
+      clips_(std::move(other.clips_)),
+      mutation_revision_(other.mutation_revision_) {
+    other.listeners_.clear();
+}
+
+MediaPool& MediaPool::operator=(MediaPool&& other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
+    root_bin_id_ = std::move(other.root_bin_id_);
+    assets_ = std::move(other.assets_);
+    bins_ = std::move(other.bins_);
+    clips_ = std::move(other.clips_);
+    mutation_revision_ = other.mutation_revision_;
+    listeners_.clear();
+    other.listeners_.clear();
+    return *this;
+}
+
+bool MediaPool::operator==(const MediaPool& other) const {
+    return root_bin_id_ == other.root_bin_id_ &&
+           assets_ == other.assets_ &&
+           bins_ == other.bins_ &&
+           clips_ == other.clips_;
+}
+
 const MediaAsset& MediaPool::register_asset(MediaAsset asset) {
     std::string id = asset.id();
+    const auto existing = assets_.find(id);
+    if (existing != assets_.end() && existing->second == asset) {
+        return existing->second;
+    }
     auto [it, _] = assets_.insert_or_assign(id, std::move(asset));
+    bump_mutation();
     return it->second;
 }
 
@@ -99,7 +155,7 @@ bool MediaPool::remove_asset(const std::string& asset_id) {
     auto it = assets_.find(asset_id);
     if (it == assets_.end()) return false;
 
-    // Remove any clips referencing this asset
+    // Remove any clips referencing this asset before removing the asset itself
     std::vector<std::string> clips_to_remove;
     for (const auto& [clip_id, clip] : clips_) {
         if (clip.asset_id() == asset_id) {
@@ -107,10 +163,39 @@ bool MediaPool::remove_asset(const std::string& asset_id) {
         }
     }
     for (const auto& cid : clips_to_remove) {
-        remove_clip(cid);
+        for (auto& [bid, bin] : bins_) {
+            (void)bid;
+            bin.remove_clip(cid);
+        }
+        clips_.erase(cid);
     }
 
     assets_.erase(it);
+    bump_mutation();
+    return true;
+}
+
+bool MediaPool::relink_asset_path(const std::string& asset_id,
+                                  const std::filesystem::path& new_path,
+                                  std::optional<uint64_t> file_size_bytes) {
+    if (new_path.empty()) {
+        return false;
+    }
+    auto it = assets_.find(asset_id);
+    if (it == assets_.end()) {
+        return false;
+    }
+
+    const auto& current_path = it->second.file_path();
+    if (current_path == new_path || current_path.lexically_normal() == new_path.lexically_normal()) {
+        return true; // Stored path unchanged -> no-op
+    }
+
+    it->second.set_file_path(new_path);
+    if (file_size_bytes.has_value()) {
+        it->second.set_file_size_bytes(*file_size_bytes);
+    }
+    bump_mutation();
     return true;
 }
 
@@ -125,6 +210,7 @@ std::string MediaPool::create_bin(const std::string& name, const std::string& pa
     bins_[new_id] = std::move(new_bin);
 
     bins_[parent].add_child_bin(new_id);
+    bump_mutation();
     return new_id;
 }
 
@@ -136,6 +222,75 @@ const MediaBin* MediaPool::find_bin(const std::string& bin_id) const noexcept {
 MediaBin* MediaPool::find_bin_mut(const std::string& bin_id) noexcept {
     auto it = bins_.find(bin_id);
     return it != bins_.end() ? &it->second : nullptr;
+}
+
+bool MediaPool::rename_bin(const std::string& bin_id, const std::string& new_name) {
+    if (new_name.empty()) {
+        return false;
+    }
+    auto it = bins_.find(bin_id);
+    if (it == bins_.end()) {
+        return false;
+    }
+    if (it->second.name() == new_name) {
+        return true;
+    }
+    it->second.set_name(new_name);
+    bump_mutation();
+    return true;
+}
+
+bool MediaPool::move_bin(const std::string& bin_id, const std::string& new_parent_bin_id) {
+    if (bin_id == root_bin_id_) {
+        return false;
+    }
+    auto bin_it = bins_.find(bin_id);
+    if (bin_it == bins_.end()) {
+        return false;
+    }
+
+    std::string target_parent = new_parent_bin_id.empty() ? root_bin_id_ : new_parent_bin_id;
+    if (bin_id == target_parent) {
+        return false;
+    }
+    auto parent_it = bins_.find(target_parent);
+    if (parent_it == bins_.end()) {
+        return false;
+    }
+
+    if (bin_it->second.parent_id() == target_parent) {
+        return true;
+    }
+
+    // Cycle check: walk ancestors from target_parent; bin_id must not appear.
+    std::unordered_set<std::string> visited;
+    std::string curr = target_parent;
+    while (!curr.empty()) {
+        if (curr == bin_id) {
+            return false;
+        }
+        if (!visited.insert(curr).second) {
+            return false;
+        }
+        auto curr_it = bins_.find(curr);
+        if (curr_it == bins_.end()) {
+            break;
+        }
+        curr = curr_it->second.parent_id();
+    }
+
+    const std::string old_parent = bin_it->second.parent_id();
+    if (!old_parent.empty()) {
+        auto old_it = bins_.find(old_parent);
+        if (old_it != bins_.end()) {
+            old_it->second.remove_child_bin(bin_id);
+        }
+    }
+
+    bin_it->second.set_parent_id(target_parent);
+    parent_it->second.add_child_bin(bin_id);
+    bump_mutation();
+    return true;
 }
 
 bool MediaPool::remove_bin(const std::string& bin_id) {
@@ -166,6 +321,7 @@ bool MediaPool::remove_bin(const std::string& bin_id) {
     }
 
     bins_.erase(it);
+    bump_mutation();
     return true;
 }
 
@@ -191,6 +347,7 @@ std::string MediaPool::create_clip(const std::string& asset_id,
     }
     bins_[bin_id].add_clip(clip_id);
 
+    bump_mutation();
     return clip_id;
 }
 
@@ -204,16 +361,66 @@ MediaClip* MediaPool::find_clip_mut(const std::string& clip_id) noexcept {
     return it != clips_.end() ? &it->second : nullptr;
 }
 
+bool MediaPool::rename_clip(const std::string& clip_id, const std::string& new_name) {
+    if (new_name.empty()) {
+        return false;
+    }
+    auto it = clips_.find(clip_id);
+    if (it == clips_.end()) {
+        return false;
+    }
+    if (it->second.name() == new_name) {
+        return true;
+    }
+    it->second.set_name(new_name);
+    bump_mutation();
+    return true;
+}
+
+bool MediaPool::set_clip_source_range(const std::string& clip_id, Rational in_point, Rational out_point) {
+    auto it = clips_.find(clip_id);
+    if (it == clips_.end()) {
+        return false;
+    }
+    if (it->second.source_in() == in_point && it->second.source_out() == out_point) {
+        return true;
+    }
+    it->second.set_source_range(in_point, out_point); // Validates out_point >= in_point before mutation
+    bump_mutation();
+    return true;
+}
+
+bool MediaPool::set_clip_color_tag(const std::string& clip_id, const std::string& color_tag) {
+    auto it = clips_.find(clip_id);
+    if (it == clips_.end()) {
+        return false;
+    }
+    if (it->second.color_tag() == color_tag) {
+        return true;
+    }
+    it->second.set_color_tag(color_tag);
+    bump_mutation();
+    return true;
+}
+
 bool MediaPool::move_clip(const std::string& clip_id, const std::string& destination_bin_id) {
     if (clips_.find(clip_id) == clips_.end()) return false;
-    if (bins_.find(destination_bin_id) == bins_.end()) return false;
+    auto dest_it = bins_.find(destination_bin_id);
+    if (dest_it == bins_.end()) return false;
+
+    const auto& dest_clips = dest_it->second.clip_ids();
+    if (std::find(dest_clips.begin(), dest_clips.end(), clip_id) != dest_clips.end()) {
+        return true;
+    }
 
     // Remove from previous bin
     for (auto& [bid, bin] : bins_) {
+        (void)bid;
         bin.remove_clip(clip_id);
     }
 
     bins_[destination_bin_id].add_clip(clip_id);
+    bump_mutation();
     return true;
 }
 
@@ -222,9 +429,11 @@ bool MediaPool::remove_clip(const std::string& clip_id) {
     if (it == clips_.end()) return false;
 
     for (auto& [bid, bin] : bins_) {
+        (void)bid;
         bin.remove_clip(clip_id);
     }
     clips_.erase(it);
+    bump_mutation();
     return true;
 }
 
@@ -253,6 +462,163 @@ std::vector<const MediaClip*> MediaPool::search_clips(const std::string& query) 
         }
     }
     return results;
+}
+
+namespace {
+
+constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
+constexpr uint64_t kFnvPrime = 1099511628211ULL;
+
+void fnv_u64(uint64_t& h, uint64_t val) noexcept {
+    for (int i = 0; i < 8; ++i) {
+        h ^= static_cast<uint64_t>((val >> (i * 8)) & 0xFFULL);
+        h *= kFnvPrime;
+    }
+}
+
+void fnv_bytes(uint64_t& h, const void* data, size_t len) noexcept {
+    fnv_u64(h, static_cast<uint64_t>(len));
+    const auto* ptr = static_cast<const unsigned char*>(data);
+    for (size_t i = 0; i < len; ++i) {
+        h ^= static_cast<uint64_t>(ptr[i]);
+        h *= kFnvPrime;
+    }
+}
+
+void fnv_string(uint64_t& h, const std::string& s) noexcept {
+    fnv_bytes(h, s.data(), s.size());
+}
+
+void fnv_rational(uint64_t& h, Rational r) noexcept {
+    fnv_u64(h, static_cast<uint64_t>(r.numerator()));
+    fnv_u64(h, static_cast<uint64_t>(r.denominator()));
+}
+
+uint64_t splitmix64(uint64_t x) noexcept {
+    x += 0x9e3779b97f4a7c15ULL;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+
+} // namespace
+
+uint64_t MediaPool::content_digest() const noexcept {
+    uint64_t h = kFnvOffsetBasis;
+    fnv_string(h, root_bin_id_);
+
+    uint64_t assets_sum = 0;
+    for (const auto& [aid, asset] : assets_) {
+        (void)aid;
+        uint64_t ah = kFnvOffsetBasis;
+        fnv_string(ah, asset.id());
+        const auto u8p = asset.file_path().u8string();
+        fnv_bytes(ah, u8p.data(), u8p.size());
+        fnv_string(ah, asset.display_name());
+        fnv_u64(ah, asset.file_size_bytes());
+        fnv_string(ah, asset.container_format());
+        fnv_rational(ah, asset.duration());
+        fnv_u64(ah, static_cast<uint64_t>(asset.streams().size()));
+        for (const auto& st : asset.streams()) {
+            fnv_u64(ah, static_cast<uint64_t>(st.index()));
+            fnv_u64(ah, static_cast<uint64_t>(st.type()));
+            fnv_string(ah, st.codec_name());
+            fnv_rational(ah, st.timebase());
+            fnv_u64(ah, static_cast<uint64_t>(st.duration_ticks()));
+            fnv_u64(ah, st.video_info().has_value() ? 1ULL : 0ULL);
+            if (st.video_info().has_value()) {
+                const auto& vi = *st.video_info();
+                fnv_u64(ah, static_cast<uint64_t>(vi.width));
+                fnv_u64(ah, static_cast<uint64_t>(vi.height));
+                fnv_rational(ah, vi.frame_rate);
+                fnv_rational(ah, vi.pixel_aspect_ratio);
+                fnv_string(ah, vi.pixel_format);
+                fnv_string(ah, vi.color_space);
+                fnv_string(ah, vi.color_range);
+                fnv_u64(ah, static_cast<uint64_t>(vi.bit_depth));
+            }
+            fnv_u64(ah, st.audio_info().has_value() ? 1ULL : 0ULL);
+            if (st.audio_info().has_value()) {
+                const auto& ai = *st.audio_info();
+                fnv_u64(ah, static_cast<uint64_t>(ai.sample_rate));
+                fnv_u64(ah, static_cast<uint64_t>(ai.channels));
+                fnv_string(ah, ai.channel_layout);
+                fnv_string(ah, ai.sample_format);
+                fnv_u64(ah, static_cast<uint64_t>(ai.bit_depth));
+            }
+        }
+        assets_sum += splitmix64(ah);
+    }
+    fnv_u64(h, assets_.size());
+    fnv_u64(h, assets_sum);
+
+    uint64_t bins_sum = 0;
+    for (const auto& [bid, bin] : bins_) {
+        (void)bid;
+        uint64_t bh = kFnvOffsetBasis;
+        fnv_string(bh, bin.id());
+        fnv_string(bh, bin.name());
+        fnv_string(bh, bin.parent_id());
+        fnv_u64(bh, static_cast<uint64_t>(bin.clip_ids().size()));
+        for (const auto& cid : bin.clip_ids()) {
+            fnv_string(bh, cid);
+        }
+        fnv_u64(bh, static_cast<uint64_t>(bin.child_bin_ids().size()));
+        for (const auto& cbid : bin.child_bin_ids()) {
+            fnv_string(bh, cbid);
+        }
+        bins_sum += splitmix64(bh);
+    }
+    fnv_u64(h, bins_.size());
+    fnv_u64(h, bins_sum);
+
+    uint64_t clips_sum = 0;
+    for (const auto& [cid, clip] : clips_) {
+        (void)cid;
+        uint64_t ch = kFnvOffsetBasis;
+        fnv_string(ch, clip.id());
+        fnv_string(ch, clip.asset_id());
+        fnv_string(ch, clip.name());
+        fnv_rational(ch, clip.source_in());
+        fnv_rational(ch, clip.source_out());
+        fnv_string(ch, clip.color_tag());
+        clips_sum += splitmix64(ch);
+    }
+    fnv_u64(h, clips_.size());
+    fnv_u64(h, clips_sum);
+
+    return splitmix64(h);
+}
+
+MediaPool::ListenerId MediaPool::add_change_listener_with_id(ChangeListener listener) {
+    static std::atomic<ListenerId> s_next_pool_listener_id{1};
+    const ListenerId id = s_next_pool_listener_id.fetch_add(1, std::memory_order_relaxed);
+    listeners_.push_back(ListenerEntry{id, std::move(listener)});
+    return id;
+}
+
+void MediaPool::remove_change_listener(ListenerId id) {
+    if (id == 0) {
+        return;
+    }
+    listeners_.erase(
+        std::remove_if(listeners_.begin(), listeners_.end(),
+            [id](const ListenerEntry& entry) { return entry.id == id; }),
+        listeners_.end());
+}
+
+void MediaPool::bump_mutation() {
+    ++mutation_revision_;
+    notify_listeners();
+}
+
+void MediaPool::notify_listeners() {
+    const auto listeners_copy = listeners_;
+    for (const auto& entry : listeners_copy) {
+        if (entry.callback) {
+            entry.callback();
+        }
+    }
 }
 
 namespace {
@@ -674,6 +1040,7 @@ MediaPool MediaPool::from_json(const std::string& json_text) {
         }
     }
 
+    pool.mutation_revision_ = 0;
     return pool;
 }
 
