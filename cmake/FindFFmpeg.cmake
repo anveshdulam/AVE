@@ -15,30 +15,50 @@ Imported targets:
   FFmpeg::swresample
 #]=======================================================================]
 
-set(_ffmpeg_search_paths
+set(_ffmpeg_explicit_paths
     ${FFMPEG_ROOT}
     ${FFMPEG_DIR}
     $ENV{FFMPEG_ROOT}
     $ENV{FFMPEG_DIR}
-    "D:/DevTools/ffmpeg"
-    "C:/Program Files/ffmpeg"
 )
 
-find_path(FFmpeg_INCLUDE_DIR
-    NAMES libavformat/avformat.h
-    PATHS ${_ffmpeg_search_paths}
-    PATH_SUFFIXES include
-)
+if(_ffmpeg_explicit_paths)
+    find_path(FFmpeg_INCLUDE_DIR
+        NAMES libavformat/avformat.h
+        HINTS ${_ffmpeg_explicit_paths}
+        PATH_SUFFIXES include
+        NO_DEFAULT_PATH
+    )
+else()
+    find_path(FFmpeg_INCLUDE_DIR
+        NAMES libavformat/avformat.h
+        PATHS
+            "D:/DevTools/ffmpeg"
+            "C:/Program Files/ffmpeg"
+        PATH_SUFFIXES include
+    )
+endif()
 
 set(_ffmpeg_components avformat avcodec avutil swscale swresample)
 set(_ffmpeg_all_found TRUE)
 
 foreach(_comp ${_ffmpeg_components})
-    find_library(FFmpeg_${_comp}_LIBRARY
-        NAMES ${_comp} lib${_comp}
-        PATHS ${_ffmpeg_search_paths}
-        PATH_SUFFIXES lib bin
-    )
+    if(_ffmpeg_explicit_paths)
+        find_library(FFmpeg_${_comp}_LIBRARY
+            NAMES ${_comp} lib${_comp}
+            HINTS ${_ffmpeg_explicit_paths}
+            PATH_SUFFIXES lib bin
+            NO_DEFAULT_PATH
+        )
+    else()
+        find_library(FFmpeg_${_comp}_LIBRARY
+            NAMES ${_comp} lib${_comp}
+            PATHS
+                "D:/DevTools/ffmpeg"
+                "C:/Program Files/ffmpeg"
+            PATH_SUFFIXES lib bin
+        )
+    endif()
     if(FFmpeg_${_comp}_LIBRARY)
         if(NOT TARGET FFmpeg::${_comp})
             add_library(FFmpeg::${_comp} UNKNOWN IMPORTED)

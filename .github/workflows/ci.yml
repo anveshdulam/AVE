@@ -50,6 +50,15 @@ jobs:
           if (-not $ffmpeg_dir -or -not (Test-Path "$ffmpeg_dir\include\libavformat\avformat.h")) {
             throw "Failed to locate extracted LGPL FFmpeg SDK under C:\"
           }
+          $buildconf = (& "$ffmpeg_dir\bin\ffmpeg.exe" -buildconf 2>&1 | Out-String)
+          if ($LASTEXITCODE -ne 0) { throw "ffmpeg.exe -buildconf failed" }
+          if ($buildconf -match '(?m)(?:^|\s)--enable-(?:gpl|nonfree|libx264|libx265|libxvid|libfdk-aac|libvidstab|avisynth|libdavs2|libxavs2)(?:\s|$)') {
+            throw "Forbidden GPL/nonfree FFmpeg configuration flag detected:`n$buildconf"
+          }
+          if ($buildconf -notmatch '(?:^|\s)--enable-shared(?:\s|$)') {
+            throw "Expected shared FFmpeg build (--enable-shared missing):`n$buildconf"
+          }
+          echo "Verified LGPL shared FFmpeg buildconf at $ffmpeg_dir"
           echo "FFMPEG_DIR=$ffmpeg_dir" >> $env:GITHUB_ENV
           echo "$ffmpeg_dir\bin" >> $env:GITHUB_PATH
           echo "Installed LGPL FFmpeg at $ffmpeg_dir"
@@ -101,20 +110,52 @@ jobs:
           cmake --build build --config Release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify FFmpeg CMake Resolution and Runtime Linkage
+        shell: pwsh
+        run: |
+          $expectedInclude = "$($env:FFMPEG_DIR.Replace('\', '/'))/include"
+          $cachedIncludeLine = Select-String -Path build\CMakeCache.txt -Pattern '^FFmpeg_INCLUDE_DIR:PATH=' | Select-Object -First 1
+          if (-not $cachedIncludeLine -or ($cachedIncludeLine.Line -ne "FFmpeg_INCLUDE_DIR:PATH=$expectedInclude")) {
+            throw "CMake did not resolve expected FFmpeg include dir '$expectedInclude': $($cachedIncludeLine.Line)"
+          }
+          $exeDeps = (dumpbin /dependents build\apps\desktop\ave_desktop.exe | Out-String)
+          if ($LASTEXITCODE -ne 0) { throw "dumpbin failed on ave_desktop.exe" }
+          foreach ($lib in @('avformat-', 'avcodec-', 'avutil-', 'swscale-', 'swresample-')) {
+            if ($exeDeps -notmatch "$lib\d+\.dll") {
+              throw "Expected dynamically linked FFmpeg DLL matching '$lib*.dll' missing from ave_desktop.exe"
+            }
+          }
+          $deployedFfDlls = Get-ChildItem -Path build\apps\desktop -File | Where-Object { $_.Name -match '^(?:av|sw).+\.dll$' }
+          if (@($deployedFfDlls).Count -lt 5) {
+            throw "Expected at least 5 deployed FFmpeg runtime DLLs in build\apps\desktop, found $(@($deployedFfDlls).Count)"
+          }
+          $gplArtifactDlls = Get-ChildItem -Path build\apps\desktop, build\tests -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '(?i)(?:postproc|x264|x265|xvid|fdk-aac|avisynth)' }
+          if ($gplArtifactDlls) {
+            throw "Forbidden GPL FFmpeg/codec DLL deployed: $($gplArtifactDlls.FullName -join ', ')"
+          }
+          foreach ($dll in $deployedFfDlls) {
+            $dllDeps = (dumpbin /dependents $dll.FullName | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin failed on $($dll.Name)" }
+            if ($dllDeps -match '(?i)\b(?:lib)?(?:x264|x265|xvidcore|fdk-aac|postproc|avidemux|avisynth)[^\s]*\.dll') {
+              throw "Forbidden GPL runtime DLL dependency detected in $($dll.Name):`n$dllDeps"
+            }
+          }
+          echo "Verified CMake FFmpeg path ($expectedInclude) and clean LGPL shared DLL linkage."
+
       - name: Run CTest
         shell: pwsh
         run: |
           Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\Windows Error Reporting' -Name 'DontShowUI' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+          $testList = (ctest --test-dir build -N | Out-String)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($testList -notmatch 'Phase10QmlOffscreenSmoke' -or $testList -notmatch 'Total Tests:\s*30\b') {
+            throw "Expected 30 registered CTest entries including Phase10QmlOffscreenSmoke. Found:`n$testList"
+          }
           ctest --test-dir build --output-on-failure --timeout 60
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Verify Desktop Shell Smoke & Headless QML
+      - name: Verify Desktop Shell Smoke
         shell: pwsh
-        env:
-          QT_QPA_PLATFORM: offscreen
-          QT_QUICK_BACKEND: software
         run: |
           .\build\apps\desktop\ave_desktop.exe --smoke-test
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          .\build\apps\desktop\ave_desktop.exe --verify-qml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

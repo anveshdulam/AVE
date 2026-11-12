@@ -289,3 +289,21 @@ if(TARGET GTest::gtest AND TARGET ave_desktop_services AND TARGET ave_playback A
         endif()
     endif()
 endif()
+
+if(TARGET ave_desktop)
+    get_target_property(_ave_desktop_qt6_qmake Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(_ave_desktop_qt6_bin_dir "${_ave_desktop_qt6_qmake}" DIRECTORY)
+    get_filename_component(_ave_desktop_qt6_root_dir "${_ave_desktop_qt6_bin_dir}" DIRECTORY)
+
+    add_test(
+        NAME Phase10QmlOffscreenSmoke
+        COMMAND $<TARGET_FILE:ave_desktop> --verify-qml
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:ave_desktop>
+    )
+    set_tests_properties(Phase10QmlOffscreenSmoke PROPERTIES
+        TIMEOUT 30
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software"
+        ENVIRONMENT_MODIFICATION
+            "QT_PLUGIN_PATH=path_list_prepend:${_ave_desktop_qt6_root_dir}/plugins;QT_PLUGIN_PATH=path_list_prepend:$<TARGET_FILE_DIR:ave_desktop>;QML_IMPORT_PATH=path_list_prepend:${_ave_desktop_qt6_root_dir}/qml;QML_IMPORT_PATH=path_list_prepend:$<TARGET_FILE_DIR:ave_desktop>/qml;PATH=path_list_prepend:${FFmpeg_INCLUDE_DIR}/../bin;PATH=path_list_prepend:${_ave_desktop_qt6_bin_dir};PATH=path_list_prepend:$<TARGET_FILE_DIR:ave_desktop>"
+    )
+endif()
