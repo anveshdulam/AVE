@@ -17,6 +17,10 @@ CommandResult InsertClipCommand::validate(const Timeline& timeline, const MediaP
     if (!track) {
         return CommandResult::failure(CommandStatus::FailedPrecondition, "Track not found: " + track_id_);
     }
+    if (track->locked()) {
+        return CommandResult::failure(CommandStatus::FailedPrecondition,
+            "Track '" + track->name() + "' (" + track_id_ + ") is locked");
+    }
     if (item_.duration().numerator() <= 0) {
         return CommandResult::failure(CommandStatus::FailedPrecondition, "Item duration must be positive");
     }
@@ -67,6 +71,10 @@ CommandResult DeleteClipCommand::validate(const Timeline& timeline, const MediaP
     const Track* track = timeline.find_track(track_id_);
     if (!track) {
         return CommandResult::failure(CommandStatus::FailedPrecondition, "Track not found: " + track_id_);
+    }
+    if (track->locked()) {
+        return CommandResult::failure(CommandStatus::FailedPrecondition,
+            "Track '" + track->name() + "' (" + track_id_ + ") is locked");
     }
     if (!track->find_item(item_id_)) {
         return CommandResult::failure(CommandStatus::FailedPrecondition, "Item not found on track: " + item_id_);
@@ -120,9 +128,17 @@ CommandResult MoveClipCommand::validate(const Timeline& timeline, const MediaPoo
     if (!src_track) return CommandResult::failure(CommandStatus::FailedPrecondition, "Source track not found: " + src_track_id_);
     const TimelineItem* item = src_track->find_item(item_id_);
     if (!item) return CommandResult::failure(CommandStatus::FailedPrecondition, "Item not found on source track: " + item_id_);
+    if (src_track->locked()) {
+        return CommandResult::failure(CommandStatus::FailedPrecondition,
+            "Source track '" + src_track->name() + "' (" + src_track_id_ + ") is locked");
+    }
 
     const Track* dst_track = timeline.find_track(dst_track_id_);
     if (!dst_track) return CommandResult::failure(CommandStatus::FailedPrecondition, "Destination track not found: " + dst_track_id_);
+    if (dst_track->locked()) {
+        return CommandResult::failure(CommandStatus::FailedPrecondition,
+            "Destination track '" + dst_track->name() + "' (" + dst_track_id_ + ") is locked");
+    }
 
     if (src_track->type() != dst_track->type()) {
         return CommandResult::failure(
@@ -206,6 +222,10 @@ SplitClipCommand::SplitClipCommand(std::string track_id,
 CommandResult SplitClipCommand::validate(const Timeline& timeline, const MediaPool& /*pool*/) const {
     const Track* track = timeline.find_track(track_id_);
     if (!track) return CommandResult::failure(CommandStatus::FailedPrecondition, "Track not found: " + track_id_);
+    if (track->locked()) {
+        return CommandResult::failure(CommandStatus::FailedPrecondition,
+            "Track '" + track->name() + "' (" + track_id_ + ") is locked");
+    }
     const TimelineItem* item = track->find_item(item_id_);
     if (!item) return CommandResult::failure(CommandStatus::FailedPrecondition, "Item not found: " + item_id_);
     if (split_time_ <= item->timeline_in() || split_time_ >= item->timeline_out()) {
@@ -262,6 +282,10 @@ SetTransformCommand::SetTransformCommand(std::string track_id,
 CommandResult SetTransformCommand::validate(const Timeline& timeline, const MediaPool& /*pool*/) const {
     const Track* track = timeline.find_track(track_id_);
     if (!track) return CommandResult::failure(CommandStatus::FailedPrecondition, "Track not found: " + track_id_);
+    if (track->locked()) {
+        return CommandResult::failure(CommandStatus::FailedPrecondition,
+            "Track '" + track->name() + "' (" + track_id_ + ") is locked");
+    }
     const TimelineItem* item = track->find_item(item_id_);
     if (!item) return CommandResult::failure(CommandStatus::FailedPrecondition, "Item not found: " + item_id_);
     if (new_params_.opacity.has_value()) {
@@ -374,6 +398,9 @@ CompositeCommand::CompositeCommand(std::string description,
 
 CommandResult CompositeCommand::validate(const Timeline& timeline, const MediaPool& pool) const {
     for (const auto& cmd : commands_) {
+        if (!cmd) {
+            return CommandResult::failure(CommandStatus::FailedPrecondition, "Null child command in CompositeCommand");
+        }
         auto res = cmd->validate(timeline, pool);
         if (!res) return res;
     }
@@ -385,6 +412,14 @@ CommandResult CompositeCommand::apply(Timeline& timeline, MediaPool& pool) {
     std::vector<std::string> all_entities;
 
     for (size_t i = 0; i < commands_.size(); ++i) {
+        if (!commands_[i]) {
+            for (int64_t j = static_cast<int64_t>(applied_count_) - 1; j >= 0; --j) {
+                commands_[static_cast<size_t>(j)]->revert(timeline, pool);
+            }
+            applied_count_ = 0;
+            return CommandResult::failure(CommandStatus::FailedPrecondition,
+                "Transaction rolled back; sub-command " + std::to_string(i) + " is null");
+        }
         auto res = commands_[i]->apply(timeline, pool);
         if (!res) {
             // Transaction rollback in reverse order

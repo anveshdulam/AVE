@@ -86,6 +86,11 @@ int main() {
                                        ave::Rational{0, 1}));
 
         ASSERT_EQ(tl.duration(), ave::Rational(15, 1));
+        ASSERT_TRUE(!v1->locked());
+        v1->set_locked(true);
+        ASSERT_TRUE(v1->locked());
+        v1->set_locked(false);
+        ASSERT_TRUE(!v1->locked());
 
         auto active_at_5 = tl.active_items_at(ave::Rational(5, 1));
         ASSERT_EQ(active_at_5.size(), 2);

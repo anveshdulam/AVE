@@ -72,6 +72,9 @@ public:
 
     /**
      * @brief Validates preconditions without mutating project state.
+     *
+     * Clip-content commands reject mutations targeting locked tracks, while
+     * operational track controls (such as SetTrackMuteCommand) remain permitted.
      */
     [[nodiscard]] virtual CommandResult validate(const Timeline& timeline, const MediaPool& pool) const = 0;
 

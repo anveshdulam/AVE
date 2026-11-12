@@ -391,6 +391,160 @@ int main() {
         ASSERT_TRUE(timeline.find_track(a1_id)->find_item("mv-a1") != nullptr);
     }
 
+    // 12. M1.1B Regression: Track lock enforcement across all clip-mutating commands
+    std::cout << "  Testing M1.1B Track Lock enforcement..." << std::endl;
+    {
+        auto* v1_trk = timeline.find_track_mut(v1_id);
+        auto* v2_trk = timeline.find_track_mut(v2_id);
+        ASSERT_TRUE(v1_trk != nullptr && v2_trk != nullptr);
+
+        // Place known reference clips on V1 and V2 while unlocked
+        ave::TimelineItem lock_v1_item("lk-v1", "c-lk1", "asset-1", "Locked Target V1",
+                                       ave::Rational{100, 1}, ave::Rational{4, 1}, ave::Rational{0, 1});
+        ave::TimelineItem lock_v2_item("lk-v2", "c-lk2", "asset-1", "Locked Target V2",
+                                       ave::Rational{110, 1}, ave::Rational{4, 1}, ave::Rational{0, 1});
+        ASSERT_TRUE(history.execute(std::make_unique<ave::InsertClipCommand>(v1_id, lock_v1_item), timeline, pool).is_success());
+        ASSERT_TRUE(history.execute(std::make_unique<ave::InsertClipCommand>(v2_id, lock_v2_item), timeline, pool).is_success());
+
+        // Lock V2; keep V1 unlocked
+        v2_trk->set_locked(true);
+        ASSERT_TRUE(v2_trk->locked());
+
+        const size_t v1_count_snap = v1_trk->items().size();
+        const size_t v2_count_snap = v2_trk->items().size();
+        const size_t undo_snap = history.undo_count();
+        const uint64_t rev_snap = history.mutation_revision();
+
+        auto assert_unchanged = [&]() {
+            ASSERT_EQ(v1_trk->items().size(), v1_count_snap);
+            ASSERT_EQ(v2_trk->items().size(), v2_count_snap);
+            ASSERT_EQ(history.undo_count(), undo_snap);
+            ASSERT_EQ(history.mutation_revision(), rev_snap);
+        };
+
+        // 12a. Insert into locked V2 rejected
+        ave::TimelineItem new_on_locked("lk-new", "c-lk-new", "asset-1", "Blocked Insert",
+                                         ave::Rational{120, 1}, ave::Rational{2, 1}, ave::Rational{0, 1});
+        auto r_ins = history.execute(std::make_unique<ave::InsertClipCommand>(v2_id, new_on_locked), timeline, pool);
+        ASSERT_FALSE(r_ins.is_success());
+        ASSERT_EQ(r_ins.status, ave::CommandStatus::FailedPrecondition);
+        ASSERT_TRUE(timeline.find_item("lk-new") == nullptr);
+        assert_unchanged();
+
+        // 12b. Delete from locked V2 rejected
+        auto r_del = history.execute(std::make_unique<ave::DeleteClipCommand>(v2_id, "lk-v2"), timeline, pool);
+        ASSERT_FALSE(r_del.is_success());
+        ASSERT_EQ(r_del.status, ave::CommandStatus::FailedPrecondition);
+        ASSERT_TRUE(v2_trk->find_item("lk-v2") != nullptr);
+        assert_unchanged();
+
+        // 12c. Move from locked source V2 -> unlocked V1 rejected
+        auto r_mv_src = history.execute(
+            std::make_unique<ave::MoveClipCommand>(v2_id, "lk-v2", v1_id, ave::Rational{130, 1}), timeline, pool);
+        ASSERT_FALSE(r_mv_src.is_success());
+        ASSERT_EQ(r_mv_src.status, ave::CommandStatus::FailedPrecondition);
+        ASSERT_TRUE(v2_trk->find_item("lk-v2") != nullptr);
+        ASSERT_EQ(v2_trk->find_item("lk-v2")->timeline_in(), ave::Rational(110, 1));
+        assert_unchanged();
+
+        // 12d. Move from unlocked V1 -> locked destination V2 rejected
+        auto r_mv_dst = history.execute(
+            std::make_unique<ave::MoveClipCommand>(v1_id, "lk-v1", v2_id, ave::Rational{130, 1}), timeline, pool);
+        ASSERT_FALSE(r_mv_dst.is_success());
+        ASSERT_EQ(r_mv_dst.status, ave::CommandStatus::FailedPrecondition);
+        ASSERT_TRUE(v1_trk->find_item("lk-v1") != nullptr);
+        ASSERT_EQ(v1_trk->find_item("lk-v1")->timeline_in(), ave::Rational(100, 1));
+        assert_unchanged();
+
+        // 12e. Move within locked V2 rejected
+        auto r_mv_same = history.execute(
+            std::make_unique<ave::MoveClipCommand>(v2_id, "lk-v2", v2_id, ave::Rational{130, 1}), timeline, pool);
+        ASSERT_FALSE(r_mv_same.is_success());
+        ASSERT_EQ(r_mv_same.status, ave::CommandStatus::FailedPrecondition);
+        ASSERT_EQ(v2_trk->find_item("lk-v2")->timeline_in(), ave::Rational(110, 1));
+        assert_unchanged();
+
+        // 12f. Split on locked V2 rejected
+        auto r_spl = history.execute(
+            std::make_unique<ave::SplitClipCommand>(v2_id, "lk-v2", ave::Rational{112, 1}), timeline, pool);
+        ASSERT_FALSE(r_spl.is_success());
+        ASSERT_EQ(r_spl.status, ave::CommandStatus::FailedPrecondition);
+        ASSERT_TRUE(v2_trk->find_item("lk-v2") != nullptr);
+        ASSERT_EQ(v2_trk->find_item("lk-v2")->duration(), ave::Rational(4, 1));
+        assert_unchanged();
+
+        // 12g. SetTransform on locked V2 rejected
+        ave::TransformParams locked_tf;
+        locked_tf.opacity = 0.25f;
+        locked_tf.transform_x = 99.0f;
+        auto r_tf = history.execute(
+            std::make_unique<ave::SetTransformCommand>(v2_id, "lk-v2", locked_tf), timeline, pool);
+        ASSERT_FALSE(r_tf.is_success());
+        ASSERT_EQ(r_tf.status, ave::CommandStatus::FailedPrecondition);
+        ASSERT_EQ(v2_trk->find_item("lk-v2")->opacity(), 1.0f);
+        ASSERT_EQ(v2_trk->find_item("lk-v2")->transform_x(), 0.0f);
+        assert_unchanged();
+
+        // 12h. CompositeCommand with unlocked child + locked child rejected atomically (no partial mutation)
+        std::vector<std::unique_ptr<ave::Command>> mixed_batch;
+        ave::TimelineItem unlocked_part("lk-unlk-part", "c-u", "asset-1", "Unlocked Child",
+                                        ave::Rational{140, 1}, ave::Rational{2, 1}, ave::Rational{0, 1});
+        mixed_batch.push_back(std::make_unique<ave::InsertClipCommand>(v1_id, unlocked_part));
+        mixed_batch.push_back(std::make_unique<ave::SetTransformCommand>(v2_id, "lk-v2", locked_tf));
+        auto comp_mixed = std::make_unique<ave::CompositeCommand>("Mixed Locked Batch", std::move(mixed_batch));
+        auto r_comp = history.execute(std::move(comp_mixed), timeline, pool);
+        ASSERT_FALSE(r_comp.is_success());
+        ASSERT_EQ(r_comp.status, ave::CommandStatus::FailedPrecondition);
+        ASSERT_TRUE(v1_trk->find_item("lk-unlk-part") == nullptr);
+        assert_unchanged();
+
+        // Direct apply() on CompositeCommand must also roll back child 0 if child 1 targets locked track
+        std::vector<std::unique_ptr<ave::Command>> direct_batch;
+        direct_batch.push_back(std::make_unique<ave::InsertClipCommand>(v1_id, unlocked_part));
+        direct_batch.push_back(std::make_unique<ave::DeleteClipCommand>(v2_id, "lk-v2"));
+        ave::CompositeCommand direct_comp("Direct Locked Batch", std::move(direct_batch));
+        auto r_direct = direct_comp.apply(timeline, pool);
+        ASSERT_FALSE(r_direct.is_success());
+        ASSERT_TRUE(v1_trk->find_item("lk-unlk-part") == nullptr);
+        ASSERT_TRUE(v2_trk->find_item("lk-v2") != nullptr);
+        assert_unchanged();
+
+        // 12i. Operational mute control & edits on unrelated unlocked V1 remain permitted while V2 is locked
+        const bool was_v2_muted = v2_trk->muted();
+        ASSERT_TRUE(history.execute(std::make_unique<ave::SetTrackMuteCommand>(v2_id, !was_v2_muted), timeline, pool).is_success());
+        ASSERT_EQ(v2_trk->muted(), !was_v2_muted);
+        ASSERT_TRUE(history.undo(timeline, pool).is_success());
+        ASSERT_EQ(v2_trk->muted(), was_v2_muted);
+
+        ave::TransformParams v1_tf;
+        v1_tf.opacity = 0.5f;
+        ASSERT_TRUE(history.execute(std::make_unique<ave::SetTransformCommand>(v1_id, "lk-v1", v1_tf), timeline, pool).is_success());
+        ASSERT_EQ(v1_trk->find_item("lk-v1")->opacity(), 0.5f);
+        ASSERT_TRUE(history.undo(timeline, pool).is_success());
+
+        // 12j. Unlocking V2 restores normal insert, transform, split, move, and delete behavior
+        v2_trk->set_locked(false);
+        ASSERT_FALSE(v2_trk->locked());
+
+        ASSERT_TRUE(history.execute(std::make_unique<ave::InsertClipCommand>(v2_id, new_on_locked), timeline, pool).is_success());
+        ASSERT_TRUE(v2_trk->find_item("lk-new") != nullptr);
+
+        ASSERT_TRUE(history.execute(std::make_unique<ave::SetTransformCommand>(v2_id, "lk-v2", locked_tf), timeline, pool).is_success());
+        ASSERT_EQ(v2_trk->find_item("lk-v2")->opacity(), 0.25f);
+
+        ASSERT_TRUE(history.execute(std::make_unique<ave::SplitClipCommand>(v2_id, "lk-v2", ave::Rational{112, 1}), timeline, pool).is_success());
+        ASSERT_TRUE(v2_trk->find_item("lk-v2") == nullptr);
+
+        // Move unlocked V1 -> unlocked V2
+        ASSERT_TRUE(history.execute(std::make_unique<ave::MoveClipCommand>(v1_id, "lk-v1", v2_id, ave::Rational{130, 1}), timeline, pool).is_success());
+        ASSERT_TRUE(v2_trk->find_item("lk-v1") != nullptr);
+
+        // Move unlocked V2 -> unlocked V1 and delete cleanly
+        ASSERT_TRUE(history.execute(std::make_unique<ave::MoveClipCommand>(v2_id, "lk-v1", v1_id, ave::Rational{100, 1}), timeline, pool).is_success());
+        ASSERT_TRUE(history.execute(std::make_unique<ave::DeleteClipCommand>(v2_id, "lk-new"), timeline, pool).is_success());
+        ASSERT_TRUE(v2_trk->find_item("lk-new") == nullptr);
+    }
+
     std::cout << "All Command Bus & Undo/Redo Engine Tests PASSED!" << std::endl;
     return 0;
 }
