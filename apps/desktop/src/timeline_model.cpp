@@ -529,6 +529,7 @@ bool TimelineModel::redo() {
 }
 
 bool TimelineModel::newProject(const QString& name) {
+    last_project_error_.clear();
     const QString trimmed = name.trimmed();
     const std::string project_title = trimmed.isEmpty() ? std::string("Untitled Project")
                                                         : trimmed.toStdString();
@@ -537,30 +538,36 @@ bool TimelineModel::newProject(const QString& name) {
 }
 
 bool TimelineModel::openProject(const QString& filePath) {
+    last_project_error_.clear();
     const std::filesystem::path src = local_path_from_qstring(filePath);
     if (src.empty()) {
+        last_project_error_ = tr("No project file location was selected.");
         return false;
     }
 
     std::error_code ec;
     if (!std::filesystem::exists(src, ec) || !std::filesystem::is_regular_file(src, ec) || ec) {
+        last_project_error_ = tr("The selected project file does not exist or cannot be accessed.");
         return false;
     }
 
     {
         QFile file(QString::fromStdWString(src.wstring()));
         if (!file.open(QIODevice::ReadOnly)) {
+            last_project_error_ = tr("Could not open the selected project file. Check file permissions.");
             return false;
         }
         const QByteArray payload = file.readAll();
         QJsonParseError parse_err{};
         const QJsonDocument doc = QJsonDocument::fromJson(payload, &parse_err);
         if (parse_err.error != QJsonParseError::NoError || !doc.isObject()) {
+            last_project_error_ = tr("The selected file is not a valid AVE project.");
             return false;
         }
         const QJsonObject obj = doc.object();
         if (!obj.contains(QStringLiteral("schema_version")) ||
             !obj.contains(QStringLiteral("timeline"))) {
+            last_project_error_ = tr("The selected file is missing required AVE project data.");
             return false;
         }
     }
@@ -569,11 +576,13 @@ bool TimelineModel::openProject(const QString& filePath) {
         ave::Project loaded = ave::Project::load(src);
         return replace_active_project(std::move(loaded));
     } catch (const std::exception&) {
+        last_project_error_ = tr("Could not load the selected project file because its contents are invalid.");
         return false;
     }
 }
 
 bool TimelineModel::saveProject(const QString& filePath) {
+    last_project_error_.clear();
     std::filesystem::path dst;
     if (filePath.trimmed().isEmpty()) {
         dst = project_.file_path();
@@ -582,6 +591,13 @@ bool TimelineModel::saveProject(const QString& filePath) {
     }
 
     if (dst.empty()) {
+        last_project_error_ = tr("No save location was selected for this project.");
+        return false;
+    }
+
+    std::error_code ec;
+    if (std::filesystem::is_directory(dst, ec) && !ec) {
+        last_project_error_ = tr("The selected destination is a folder, not a project file.");
         return false;
     }
 
@@ -589,13 +605,20 @@ bool TimelineModel::saveProject(const QString& filePath) {
     try {
         ok = project_.save(dst);
     } catch (const std::exception&) {
+        last_project_error_ = tr("Could not save the project file. Check folder permissions and available disk space.");
         return false;
     }
 
     if (ok) {
         sync_from_project(false, false);
+    } else {
+        last_project_error_ = tr("Could not save the project file. Check that the destination folder is writable.");
     }
     return ok;
+}
+
+QString TimelineModel::lastProjectError() const {
+    return last_project_error_;
 }
 
 bool TimelineModel::exportOtio(const QString& filePath) {

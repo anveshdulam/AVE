@@ -248,16 +248,18 @@ if(TARGET GTest::gtest AND TARGET ave_desktop_services AND TARGET ave_playback A
             Qt6::Gui
             Qt6::Quick
             Qt6::Qml
+            Qt6::QuickControls2
             Qt6::Test
         )
         target_compile_definitions(ave_phase10_services_property_test PRIVATE
             AVE_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+            AVE_DESKTOP_QML_DIR="${CMAKE_SOURCE_DIR}/apps/desktop/qml"
         )
         target_compile_features(ave_phase10_services_property_test PRIVATE cxx_std_20)
 
         add_test(NAME Phase10ServicesPropertyTest COMMAND ave_phase10_services_property_test)
         set_tests_properties(Phase10ServicesPropertyTest PROPERTIES
-            ENVIRONMENT "${_ave_qt6_test_env}"
+            ENVIRONMENT "${_ave_qt6_test_env};QT_QUICK_BACKEND=software"
             ENVIRONMENT_MODIFICATION "${_ave_qt6_test_env_mod}"
         )
 

@@ -10,6 +10,12 @@ Rectangle {
     border.width: 1
 
     signal openAiAssistantRequested()
+    signal newProjectRequested()
+    signal openProjectRequested()
+    signal saveProjectRequested()
+    signal saveProjectAsRequested()
+
+    property bool lifecycleBusy: false
 
     readonly property bool hasLivePlayback: (typeof playbackService !== "undefined" && playbackService !== null)
     readonly property bool hasLiveTimeline: (typeof timelineModel !== "undefined" && timelineModel !== null)
@@ -38,41 +44,6 @@ Rectangle {
         function onLastImportErrorChanged() {
             if (mediaPoolModel.lastImportError !== "") {
                 root.showFeedback(mediaPoolModel.lastImportError, true)
-            }
-        }
-    }
-
-    FileDialog {
-        id: openProjectDialog
-        title: qsTr("Open AVE Project")
-        fileMode: FileDialog.OpenFile
-        nameFilters: [qsTr("AVE Projects (*.aveproj)"), qsTr("All files (*)")]
-        onAccepted: {
-            if (!root.hasLiveTimeline || !selectedFile) {
-                return
-            }
-            if (timelineModel.openProject(selectedFile.toString())) {
-                root.showFeedback(qsTr("Project opened."), false)
-            } else {
-                root.showFeedback(qsTr("Failed to open project file."), true)
-            }
-        }
-    }
-
-    FileDialog {
-        id: saveProjectAsDialog
-        title: qsTr("Save AVE Project As")
-        fileMode: FileDialog.SaveFile
-        defaultSuffix: "aveproj"
-        nameFilters: [qsTr("AVE Projects (*.aveproj)"), qsTr("All files (*)")]
-        onAccepted: {
-            if (!root.hasLiveTimeline || !selectedFile) {
-                return
-            }
-            if (timelineModel.saveProject(selectedFile.toString())) {
-                root.showFeedback(qsTr("Project saved."), false)
-            } else {
-                root.showFeedback(qsTr("Failed to save project file."), true)
             }
         }
     }
@@ -166,39 +137,23 @@ Rectangle {
         id: fileMenu
         MenuItem {
             text: qsTr("New Project")
-            enabled: root.hasLiveTimeline
-            onTriggered: {
-                if (timelineModel.newProject()) {
-                    root.showFeedback(qsTr("Created new project."), false)
-                } else {
-                    root.showFeedback(qsTr("Failed to create new project."), true)
-                }
-            }
+            enabled: root.hasLiveTimeline && !root.lifecycleBusy
+            onTriggered: root.newProjectRequested()
         }
         MenuItem {
             text: qsTr("Open Project...")
-            enabled: root.hasLiveTimeline
-            onTriggered: openProjectDialog.open()
+            enabled: root.hasLiveTimeline && !root.lifecycleBusy
+            onTriggered: root.openProjectRequested()
         }
         MenuItem {
             text: qsTr("Save Project")
-            enabled: root.hasLiveTimeline
-            onTriggered: {
-                if (timelineModel.projectFilePath !== "") {
-                    if (timelineModel.saveProject()) {
-                        root.showFeedback(qsTr("Project saved."), false)
-                    } else {
-                        root.showFeedback(qsTr("Failed to save project."), true)
-                    }
-                } else {
-                    saveProjectAsDialog.open()
-                }
-            }
+            enabled: root.hasLiveTimeline && !root.lifecycleBusy
+            onTriggered: root.saveProjectRequested()
         }
         MenuItem {
             text: qsTr("Save Project As...")
-            enabled: root.hasLiveTimeline
-            onTriggered: saveProjectAsDialog.open()
+            enabled: root.hasLiveTimeline && !root.lifecycleBusy
+            onTriggered: root.saveProjectAsRequested()
         }
         MenuSeparator {}
         MenuItem {

@@ -3,6 +3,7 @@
 #include "ave/command.hpp"
 #include "ave/frame_presentation_hub.hpp"
 #include "ave/inspector_service.hpp"
+#include "ave/live_frame_image_provider.hpp"
 #include "ave/media_asset.hpp"
 #include "ave/media_cache.hpp"
 #include "ave/media_import_queue.hpp"
@@ -23,6 +24,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <set>
@@ -32,13 +34,21 @@
 
 #include <QAbstractListModel>
 #include <QCoreApplication>
+#include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QList>
 #include <QMetaEnum>
 #include <QMetaObject>
 #include <QMetaProperty>
+#include <QQmlApplicationEngine>
+#include <QQmlContext>
+#include <QQmlError>
+#include <QQuickItem>
+#include <QQuickStyle>
+#include <QQuickWindow>
 #include <QSignalSpy>
 #include <QUrl>
 #include <QVariantList>
@@ -1005,8 +1015,480 @@ TEST(Phase10ServicesPropertyTest, M13AUnifiedDirtyTrackingDesktopIntegration) {
     hub->shutdown();
 }
 
+namespace {
+
+QObject* find_qml_descendant(QObject* root_window, const char* object_name) {
+    if (!root_window) {
+        return nullptr;
+    }
+    if (QObject* direct = root_window->findChild<QObject*>(QString::fromUtf8(object_name))) {
+        return direct;
+    }
+    if (QObject* dlg = root_window->findChild<QObject*>(QStringLiteral("unsavedChangesDialog"))) {
+        if (QObject* inside_dlg = dlg->findChild<QObject*>(QString::fromUtf8(object_name))) {
+            return inside_dlg;
+        }
+        if (QObject* content_item = dlg->property("contentItem").value<QObject*>()) {
+            if (QObject* inside_content = content_item->findChild<QObject*>(QString::fromUtf8(object_name))) {
+                return inside_content;
+            }
+        }
+    }
+    return nullptr;
+}
+
+void pump_events_until(const std::function<bool()>& pred, int max_ms = 500) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(max_ms);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    while (!pred() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+}
+
+void create_valid_saved_project_file(const std::filesystem::path& file_path,
+                                     const std::string& project_name,
+                                     const std::string& clip_id,
+                                     const std::string& clip_name) {
+    ave::Project proj(project_name);
+    const std::string v1 = proj.timeline().video_tracks()[0].id();
+    proj.media_pool_mut().register_asset(
+        make_synthetic_av_asset("asset-disk-" + clip_id, clip_name, "disk_" + clip_id + ".mp4", ave::Rational{3, 1}));
+    const ave::TimelineItem item(
+        clip_id, "mc-" + clip_id, "asset-disk-" + clip_id, clip_name,
+        ave::Rational{0, 1}, ave::Rational{3, 1}, ave::Rational{0, 1});
+    ASSERT_TRUE(proj.execute_command(std::make_unique<ave::InsertClipCommand>(v1, item)).is_success());
+    ASSERT_TRUE(proj.save(file_path));
+}
+
+} // namespace
+
+TEST(Phase10ServicesPropertyTest, M13BTimelineModelErrorAndSaveAsState) {
+    ScopedTempDir tmp("ave_m13b_errors");
+
+    ave::Project project("Error Handling Project");
+    auto store = std::make_shared<ave::PlaybackSnapshotStore>(project.timeline(), project.media_pool());
+    ave::ProjectSnapshotCoordinator coordinator(project, store);
+    ave::desktop::TimelineModel timeline_model(project, nullptr, &coordinator);
+
+    EXPECT_TRUE(timeline_model.lastProjectError().isEmpty());
+
+    // Saving untitled project without path reports clear message and keeps state untouched
+    project.media_pool_mut().create_bin("Unsaved Bin");
+    EXPECT_TRUE(timeline_model.isDirty());
+    EXPECT_FALSE(timeline_model.saveProject());
+    EXPECT_FALSE(timeline_model.lastProjectError().isEmpty());
+    EXPECT_TRUE(timeline_model.projectFilePath().isEmpty());
+    EXPECT_TRUE(timeline_model.isDirty());
+
+    // Save to valid path clears error and updates projectFilePath
+    const std::filesystem::path proj_a = tmp.path / "proj_a.aveproj";
+    ASSERT_TRUE(timeline_model.saveProject(QString::fromStdWString(proj_a.wstring())));
+    EXPECT_TRUE(timeline_model.lastProjectError().isEmpty());
+    EXPECT_EQ(timeline_model.projectFilePath(), QString::fromStdWString(proj_a.wstring()));
+    EXPECT_FALSE(timeline_model.isDirty());
+
+    // Dirty again, attempt failing Save As -> preserves previous projectFilePath, keeps dirty, populates lastProjectError
+    project.media_pool_mut().create_bin("Second Bin");
+    EXPECT_TRUE(timeline_model.isDirty());
+    const std::filesystem::path dir_target = tmp.path / "folder_not_file.aveproj";
+    std::filesystem::create_directories(dir_target);
+    EXPECT_FALSE(timeline_model.saveProject(QString::fromStdWString(dir_target.wstring())));
+    EXPECT_FALSE(timeline_model.lastProjectError().isEmpty());
+    EXPECT_EQ(timeline_model.projectFilePath(), QString::fromStdWString(proj_a.wstring()));
+    EXPECT_TRUE(timeline_model.isDirty());
+
+    // Blocked .tmp save failure preserves disk copy and dirty state
+    const std::filesystem::path blocker_tmp(proj_a.wstring() + L".tmp");
+    std::filesystem::create_directories(blocker_tmp / L"nested");
+    EXPECT_FALSE(timeline_model.saveProject());
+    EXPECT_FALSE(timeline_model.lastProjectError().isEmpty());
+    EXPECT_TRUE(timeline_model.isDirty());
+    std::filesystem::remove_all(blocker_tmp);
+
+    // Invalid openProject populates lastProjectError and preserves current project state
+    EXPECT_FALSE(timeline_model.openProject(QString::fromStdWString((tmp.path / "missing.aveproj").wstring())));
+    EXPECT_FALSE(timeline_model.lastProjectError().isEmpty());
+    EXPECT_EQ(timeline_model.projectFilePath(), QString::fromStdWString(proj_a.wstring()));
+    EXPECT_TRUE(timeline_model.isDirty());
+
+    // Valid openProject clears lastProjectError
+    ASSERT_TRUE(timeline_model.openProject(QString::fromStdWString(proj_a.wstring())));
+    EXPECT_TRUE(timeline_model.lastProjectError().isEmpty());
+    EXPECT_FALSE(timeline_model.isDirty());
+
+    coordinator.unbind();
+}
+
+TEST(Phase10ServicesPropertyTest, M13BProjectLifecycleDialogAndCloseFlows) {
+#ifndef AVE_DESKTOP_QML_DIR
+    FAIL() << "AVE_DESKTOP_QML_DIR must be defined for QML lifecycle integration test";
+#endif
+    ScopedTempDir tmp("ave_m13b_qml");
+
+    const std::filesystem::path proj_a_path = tmp.path / "project_a.aveproj";
+    const std::filesystem::path proj_b_path = tmp.path / "project_b.aveproj";
+    const std::filesystem::path save_as_path = tmp.path / "project_saved_as.aveproj";
+    const std::filesystem::path close_save_as_path = tmp.path / "project_close_save_as.aveproj";
+    create_valid_saved_project_file(proj_a_path, "Project A", "clip-a", "Alpha.mp4");
+    create_valid_saved_project_file(proj_b_path, "Project B", "clip-b", "Beta.mp4");
+
+    const QString proj_a_url = QUrl::fromLocalFile(QString::fromStdWString(proj_a_path.wstring())).toString();
+    const QString proj_b_url = QUrl::fromLocalFile(QString::fromStdWString(proj_b_path.wstring())).toString();
+    const QString save_as_url = QUrl::fromLocalFile(QString::fromStdWString(save_as_path.wstring())).toString();
+    const QString close_save_as_url = QUrl::fromLocalFile(QString::fromStdWString(close_save_as_path.wstring())).toString();
+
+    auto project = std::make_unique<ave::Project>("Clean Initial");
+    auto snapshot_store = std::make_shared<ave::PlaybackSnapshotStore>(
+        project->timeline(), project->media_pool());
+    auto frame_hub = std::make_shared<ave::FramePresentationHub>();
+    auto media_cache = std::make_shared<ave::MediaCache>(tmp.path / "cache");
+    auto import_queue = std::make_shared<ave::MediaImportQueue>();
+
+    ave::PlaybackSessionConfig cfg;
+    cfg.max_preview_width = 320;
+    cfg.max_preview_height = 180;
+    auto session = std::make_unique<ave::PlaybackSession>(snapshot_store, cfg, frame_hub);
+    auto coordinator = std::make_unique<ave::ProjectSnapshotCoordinator>(
+        *project, snapshot_store, session.get());
+
+    auto media_pool_model = std::make_unique<ave::desktop::MediaPoolModel>(
+        *project, import_queue, nullptr, media_cache);
+    auto timeline_model = std::make_unique<ave::desktop::TimelineModel>(
+        *project, nullptr, coordinator.get(), media_cache);
+    auto inspector_service = std::make_unique<ave::desktop::InspectorService>(
+        *project, *timeline_model);
+    auto playback_service = std::make_unique<ave::desktop::PlaybackService>(
+        *session, frame_hub, snapshot_store);
+    auto ai_studio_service = std::make_unique<ave::desktop::AiStudioService>(
+        *project, nullptr, snapshot_store, coordinator.get());
+
+    QObject::connect(
+        media_pool_model.get(), &ave::desktop::MediaPoolModel::projectMediaMutated,
+        media_pool_model.get(), [&coordinator]() {
+            if (coordinator) {
+                coordinator->notify_media_mutated();
+            }
+        });
+    QObject::connect(
+        timeline_model.get(), &ave::desktop::TimelineModel::projectReloaded,
+        media_pool_model.get(), &ave::desktop::MediaPoolModel::reloadFromProject);
+
+    auto engine = std::make_unique<QQmlApplicationEngine>();
+    QList<QQmlError> qml_warnings;
+    QObject::connect(
+        engine.get(), &QQmlEngine::warnings,
+        engine.get(), [&qml_warnings](const QList<QQmlError>& warnings) {
+            qml_warnings.append(warnings);
+        });
+
+    engine->addImageProvider(
+        QStringLiteral("aveframe"),
+        new ave::desktop::LiveFrameImageProvider(frame_hub));
+    engine->rootContext()->setContextProperty(QStringLiteral("mediaPoolModel"), media_pool_model.get());
+    engine->rootContext()->setContextProperty(QStringLiteral("timelineModel"), timeline_model.get());
+    engine->rootContext()->setContextProperty(QStringLiteral("inspectorService"), inspector_service.get());
+    engine->rootContext()->setContextProperty(QStringLiteral("playbackService"), playback_service.get());
+    engine->rootContext()->setContextProperty(QStringLiteral("aiStudioService"), ai_studio_service.get());
+
+    const QString main_qml_file = QStringLiteral(AVE_DESKTOP_QML_DIR) + QStringLiteral("/main.qml");
+    engine->load(QUrl::fromLocalFile(main_qml_file));
+    ASSERT_FALSE(engine->rootObjects().isEmpty()) << "Failed to load " << main_qml_file.toStdString();
+
+    auto* root_window = qobject_cast<QQuickWindow*>(engine->rootObjects().constFirst());
+    ASSERT_NE(root_window, nullptr);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+
+    QObject* unsaved_dialog = find_qml_descendant(root_window, "unsavedChangesDialog");
+    QObject* save_btn = find_qml_descendant(root_window, "unsavedSaveButton");
+    QObject* dont_save_btn = find_qml_descendant(root_window, "unsavedDontSaveButton");
+    QObject* cancel_btn = find_qml_descendant(root_window, "unsavedCancelButton");
+    QObject* error_text = find_qml_descendant(root_window, "unsavedErrorText");
+    ASSERT_NE(unsaved_dialog, nullptr);
+    ASSERT_NE(save_btn, nullptr);
+    ASSERT_NE(dont_save_btn, nullptr);
+    ASSERT_NE(cancel_btn, nullptr);
+    ASSERT_NE(error_text, nullptr);
+
+    auto dialog_visible = [unsaved_dialog]() -> bool {
+        return unsaved_dialog->property("visible").toBool();
+    };
+    auto click_button = [](QObject* btn) {
+        ASSERT_TRUE(QMetaObject::invokeMethod(btn, "clicked", Qt::DirectConnection));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    };
+    auto invoke_root = [root_window](const char* method, const QVariant& arg = QVariant()) {
+        if (arg.isValid()) {
+            ASSERT_TRUE(QMetaObject::invokeMethod(
+                root_window, method, Qt::DirectConnection, Q_ARG(QVariant, arg)));
+        } else {
+            ASSERT_TRUE(QMetaObject::invokeMethod(root_window, method, Qt::DirectConnection));
+        }
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    };
+    auto insert_dirty_clip = [&](const std::string& clip_suffix) {
+        const std::string v1 = project->timeline().video_tracks()[0].id();
+        const std::string asset_id = "asset-live-" + clip_suffix;
+        project->media_pool_mut().register_asset(
+            make_synthetic_av_asset(asset_id, clip_suffix + ".mp4", clip_suffix + ".mp4", ave::Rational{2, 1}));
+        media_pool_model->reloadFromProject();
+        ASSERT_TRUE(timeline_model->insertClipFromAsset(
+            QString::fromStdString(asset_id), QString::fromStdString(v1), -1.0));
+        ASSERT_TRUE(timeline_model->isDirty());
+    };
+
+    // 1. Clean project -> New skips dialog and creates a fresh clean project
+    EXPECT_FALSE(timeline_model->isDirty());
+    invoke_root("requestNewProject");
+    EXPECT_FALSE(dialog_visible());
+    EXPECT_EQ(timeline_model->projectName(), QStringLiteral("Untitled Project"));
+    EXPECT_FALSE(timeline_model->isDirty());
+    EXPECT_TRUE(root_window->title().contains(QStringLiteral("Untitled Project")));
+    EXPECT_FALSE(root_window->title().contains(QStringLiteral("*")));
+
+    // 14. Clean project -> Close proceeds immediately without opening Unsaved Changes dialog
+    EXPECT_TRUE(root_window->isVisible());
+    EXPECT_TRUE(root_window->close());
+    EXPECT_FALSE(dialog_visible());
+    EXPECT_FALSE(root_window->isVisible());
+
+    root_window->show();
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    ASSERT_TRUE(root_window->isVisible());
+
+    // Open clean Project A, then dirty it -> verify window title asterisk reflects dirty state
+    ASSERT_TRUE(timeline_model->openProject(proj_a_url));
+    EXPECT_FALSE(timeline_model->isDirty());
+    insert_dirty_clip("extra1");
+    EXPECT_EQ(timeline_model->clipsModel()->rowCount(), 2);
+    EXPECT_TRUE(root_window->title().contains(QStringLiteral("Project A *")));
+
+    // 4. Dirty project -> New -> Cancel preserves edits & dirty state
+    invoke_root("requestNewProject");
+    EXPECT_TRUE(dialog_visible());
+    EXPECT_EQ(root_window->property("pendingAction").toString(), QStringLiteral("new"));
+
+    // 15. Reentrancy guard: repeated trigger requests do NOT duplicate/corrupt pending flow
+    invoke_root("requestNewProject");
+    invoke_root("requestOpenProject");
+    invoke_root("beginOpenProjectPath", proj_b_url);
+    EXPECT_EQ(root_window->property("pendingAction").toString(), QStringLiteral("new"));
+    EXPECT_FALSE(root_window->property("awaitingOpenDialog").toBool());
+
+    click_button(cancel_btn);
+    EXPECT_FALSE(dialog_visible());
+    EXPECT_FALSE(root_window->property("hasPendingLifecycleFlow").toBool());
+    EXPECT_TRUE(timeline_model->isDirty());
+    EXPECT_EQ(timeline_model->clipsModel()->rowCount(), 2);
+    EXPECT_EQ(timeline_model->projectName(), QStringLiteral("Project A"));
+
+    // 3. Dirty project -> New -> Don't Save discards edits & preserves disk Project A
+    invoke_root("requestNewProject");
+    EXPECT_TRUE(dialog_visible());
+    click_button(dont_save_btn);
+    EXPECT_FALSE(dialog_visible());
+    EXPECT_EQ(timeline_model->projectName(), QStringLiteral("Untitled Project"));
+    EXPECT_FALSE(timeline_model->isDirty());
+    EXPECT_EQ(timeline_model->clipsModel()->rowCount(), 0);
+    EXPECT_EQ(ave::Project::load(proj_a_path).timeline().video_tracks()[0].items().size(), 1u);
+
+    // 2a. Dirty saved project -> New -> Save saves Project A (now 2 clips on disk), then opens clean Untitled Project
+    ASSERT_TRUE(timeline_model->openProject(proj_a_url));
+    insert_dirty_clip("extra_new_save");
+    ASSERT_EQ(timeline_model->clipsModel()->rowCount(), 2);
+    invoke_root("requestNewProject");
+    EXPECT_TRUE(dialog_visible());
+    click_button(save_btn);
+    EXPECT_FALSE(dialog_visible());
+    EXPECT_EQ(timeline_model->projectName(), QStringLiteral("Untitled Project"));
+    EXPECT_FALSE(timeline_model->isDirty());
+    EXPECT_EQ(timeline_model->clipsModel()->rowCount(), 0);
+    EXPECT_EQ(ave::Project::load(proj_a_path).timeline().video_tracks()[0].items().size(), 2u);
+
+    // 2b + 12a. Dirty UNTITLED project -> New -> Save opens Save As; cancelling Save As preserves changes; selecting saves & completes New
+    insert_dirty_clip("untitled_new_clip");
+    invoke_root("requestNewProject");
+    EXPECT_TRUE(dialog_visible());
+    click_button(save_btn);
+    EXPECT_FALSE(dialog_visible());
+    EXPECT_TRUE(root_window->property("awaitingSaveAs").toBool());
+    EXPECT_EQ(root_window->property("pendingAction").toString(), QStringLiteral("new"));
+
+    // Simulate user cancelling Save As dialog
+    invoke_root("handleSaveProjectAsCancelled");
+    EXPECT_FALSE(root_window->property("awaitingSaveAs").toBool());
+    EXPECT_FALSE(root_window->property("hasPendingLifecycleFlow").toBool());
+    EXPECT_TRUE(timeline_model->isDirty());
+    EXPECT_EQ(timeline_model->clipsModel()->rowCount(), 1);
+
+    // Retry Dirty untitled -> New -> Save -> complete Save As -> saves file AND finishes New
+    invoke_root("requestNewProject");
+    EXPECT_TRUE(dialog_visible());
+    click_button(save_btn);
+    EXPECT_TRUE(root_window->property("awaitingSaveAs").toBool());
+    invoke_root("handleSaveProjectAsSelected", save_as_url);
+    EXPECT_FALSE(root_window->property("hasPendingLifecycleFlow").toBool());
+    EXPECT_EQ(timeline_model->projectName(), QStringLiteral("Untitled Project"));
+    EXPECT_FALSE(timeline_model->isDirty());
+    EXPECT_TRUE(std::filesystem::exists(save_as_path));
+    EXPECT_EQ(ave::Project::load(save_as_path).timeline().video_tracks()[0].items().size(), 1u);
+
+    // 7. Dirty project -> Open -> Cancel keeps current project and ignores selected target
+    ASSERT_TRUE(timeline_model->openProject(proj_a_url));
+    insert_dirty_clip("open_cancel");
+    invoke_root("beginOpenProjectPath", proj_b_url);
+    EXPECT_TRUE(dialog_visible());
+    EXPECT_EQ(root_window->property("pendingAction").toString(), QStringLiteral("open"));
+    click_button(cancel_btn);
+    EXPECT_FALSE(dialog_visible());
+    EXPECT_EQ(timeline_model->projectName(), QStringLiteral("Project A"));
+    EXPECT_TRUE(timeline_model->isDirty());
+    EXPECT_EQ(timeline_model->clipsModel()->rowCount(), 3);
+
+    // 6. Dirty project -> Open -> Don't Save loads Project B cleanly & discards extra unsaved clip
+    invoke_root("beginOpenProjectPath", proj_b_url);
+    EXPECT_TRUE(dialog_visible());
+    click_button(dont_save_btn);
+    EXPECT_FALSE(dialog_visible());
+    EXPECT_EQ(timeline_model->projectName(), QStringLiteral("Project B"));
+    EXPECT_FALSE(timeline_model->isDirty());
+    EXPECT_EQ(timeline_model->clipsModel()->rowCount(), 1);
+    EXPECT_EQ(ave::Project::load(proj_a_path).timeline().video_tracks()[0].items().size(), 2u);
+
+    // 5. Dirty project -> Open -> Save writes Project B's edit to disk first, then opens Project A cleanly
+    insert_dirty_clip("open_save");
+    invoke_root("beginOpenProjectPath", proj_a_url);
+    EXPECT_TRUE(dialog_visible());
+    click_button(save_btn);
+    EXPECT_FALSE(dialog_visible());
+    EXPECT_EQ(timeline_model->projectName(), QStringLiteral("Project A"));
+    EXPECT_FALSE(timeline_model->isDirty());
+    EXPECT_EQ(ave::Project::load(proj_b_path).timeline().video_tracks()[0].items().size(), 2u);
+
+    // 11. Failed Save blocks pending replacement & keeps Unsaved Changes dialog open with visible error
+    insert_dirty_clip("blocked_save");
+    const std::filesystem::path proj_a_tmp(proj_a_path.wstring() + L".tmp");
+    std::filesystem::create_directories(proj_a_tmp / L"blocker");
+    invoke_root("beginOpenProjectPath", proj_b_url);
+    EXPECT_TRUE(dialog_visible());
+    click_button(save_btn);
+    EXPECT_TRUE(dialog_visible()); // Dialog must stay open!
+    EXPECT_EQ(timeline_model->projectName(), QStringLiteral("Project A")); // Not replaced!
+    EXPECT_TRUE(timeline_model->isDirty());
+    EXPECT_FALSE(error_text->property("text").toString().isEmpty());
+    EXPECT_FALSE(root_window->property("lastLifecycleErrorMessage").toString().isEmpty());
+    // Clear blocker -> retrying Save now succeeds and completes Open Project B
+    std::filesystem::remove_all(proj_a_tmp);
+    click_button(save_btn);
+    EXPECT_FALSE(dialog_visible());
+    EXPECT_EQ(timeline_model->projectName(), QStringLiteral("Project B"));
+    EXPECT_FALSE(timeline_model->isDirty());
+
+    // 13. Failed Save As preserves previous projectFilePath, dirty state, and reports clear error without replacing
+    insert_dirty_clip("bad_save_as");
+    const QString prev_path_before_bad_save_as = timeline_model->projectFilePath();
+    const std::filesystem::path bad_save_as_dir = tmp.path / "folder_save_as.aveproj";
+    std::filesystem::create_directories(bad_save_as_dir);
+    const QString bad_save_as_url = QUrl::fromLocalFile(QString::fromStdWString(bad_save_as_dir.wstring())).toString();
+    invoke_root("requestSaveProjectAs");
+    EXPECT_TRUE(root_window->property("awaitingSaveAs").toBool());
+    invoke_root("handleSaveProjectAsSelected", bad_save_as_url);
+    EXPECT_FALSE(root_window->property("awaitingSaveAs").toBool());
+    EXPECT_FALSE(root_window->property("lastLifecycleErrorMessage").toString().isEmpty());
+    EXPECT_EQ(timeline_model->projectFilePath(), prev_path_before_bad_save_as);
+    EXPECT_TRUE(timeline_model->isDirty());
+
+    // 10. Dirty project -> Close -> Cancel rejects close & leaves window open with edits intact
+    EXPECT_FALSE(root_window->close()); // onClosing must set close.accepted = false!
+    EXPECT_TRUE(root_window->isVisible());
+    EXPECT_TRUE(dialog_visible());
+    EXPECT_EQ(root_window->property("pendingAction").toString(), QStringLiteral("close"));
+    // Repeated close request while dialog is open must not reset/corrupt flow
+    EXPECT_FALSE(root_window->close());
+    EXPECT_TRUE(dialog_visible());
+    click_button(cancel_btn);
+    EXPECT_FALSE(dialog_visible());
+    EXPECT_TRUE(root_window->isVisible());
+    EXPECT_FALSE(root_window->property("closeApproved").toBool());
+    EXPECT_TRUE(timeline_model->isDirty());
+
+    // 9. Dirty project -> Close -> Don't Save rejects initially, then closes window cleanly after Don't Save
+    EXPECT_FALSE(root_window->close());
+    EXPECT_TRUE(root_window->isVisible());
+    EXPECT_TRUE(dialog_visible());
+    click_button(dont_save_btn);
+    pump_events_until([root_window]() { return !root_window->isVisible(); });
+    EXPECT_FALSE(root_window->isVisible());
+    EXPECT_FALSE(root_window->property("closeApproved").toBool());
+
+    // 8a. Dirty saved project -> Close -> Save saves disk copy and closes window cleanly
+    root_window->show();
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    ASSERT_TRUE(timeline_model->openProject(proj_a_url));
+    const std::size_t proj_a_clips_before = ave::Project::load(proj_a_path).timeline().video_tracks()[0].items().size();
+    insert_dirty_clip("close_save");
+    EXPECT_FALSE(root_window->close());
+    EXPECT_TRUE(root_window->isVisible());
+    EXPECT_TRUE(dialog_visible());
+    click_button(save_btn);
+    pump_events_until([root_window]() { return !root_window->isVisible(); });
+    EXPECT_FALSE(root_window->isVisible());
+    EXPECT_FALSE(timeline_model->isDirty());
+    EXPECT_EQ(ave::Project::load(proj_a_path).timeline().video_tracks()[0].items().size(), proj_a_clips_before + 1u);
+
+    // 8b + 12b. Dirty untitled project -> Close -> Save -> Save As cancelled keeps window open; retry closes & saves
+    root_window->show();
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    ASSERT_TRUE(timeline_model->newProject(QStringLiteral("Untitled Closing")));
+    insert_dirty_clip("close_save_as_clip");
+    EXPECT_FALSE(root_window->close());
+    EXPECT_TRUE(dialog_visible());
+    click_button(save_btn);
+    EXPECT_TRUE(root_window->property("awaitingSaveAs").toBool());
+    invoke_root("handleSaveProjectAsCancelled");
+    EXPECT_TRUE(root_window->isVisible());
+    EXPECT_TRUE(timeline_model->isDirty());
+
+    EXPECT_FALSE(root_window->close());
+    EXPECT_TRUE(dialog_visible());
+    click_button(save_btn);
+    EXPECT_TRUE(root_window->property("awaitingSaveAs").toBool());
+    invoke_root("handleSaveProjectAsSelected", close_save_as_url);
+    pump_events_until([root_window]() { return !root_window->isVisible(); });
+    EXPECT_FALSE(root_window->isVisible());
+    EXPECT_FALSE(timeline_model->isDirty());
+    EXPECT_TRUE(std::filesystem::exists(close_save_as_path));
+
+    // Zero QML warnings emitted across the entire lifecycle test
+    EXPECT_TRUE(qml_warnings.isEmpty())
+        << (qml_warnings.isEmpty() ? "" : qml_warnings.constFirst().toString().toStdString());
+
+    // Deterministic reverse teardown
+    engine.reset();
+    playback_service->shutdown();
+    media_pool_model->shutdown();
+    ai_studio_service->shutdown();
+    session->shutdown();
+    frame_hub->shutdown();
+    coordinator->unbind();
+    ai_studio_service.reset();
+    inspector_service.reset();
+    timeline_model.reset();
+    playback_service.reset();
+    media_pool_model.reset();
+    session.reset();
+    coordinator.reset();
+    import_queue.reset();
+    media_cache.reset();
+    frame_hub.reset();
+    snapshot_store.reset();
+    project.reset();
+}
+
 int main(int argc, char** argv) {
-    QCoreApplication app(argc, argv);
+    QGuiApplication app(argc, argv);
+    app.setQuitOnLastWindowClosed(false);
+    QQuickStyle::setStyle(QStringLiteral("Fusion"));
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

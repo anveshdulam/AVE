@@ -346,6 +346,19 @@ int main(int argc, char* argv[]) {
         ave::Project reloaded_safe = ave::Project::load(guarded_file);
         ASSERT_EQ(reloaded_safe.name(), "Original Valid State");
         ASSERT_TRUE(reloaded_safe.timeline().find_item("dirty-1") == nullptr);
+
+        // Untitled dirty project failing initial save preserves empty file_path and dirty state, then saves cleanly once fixed
+        ave::Project untitled_dirty("Untitled M13B");
+        untitled_dirty.media_pool_mut().create_bin("Scratch Bin");
+        ASSERT_TRUE(untitled_dirty.is_dirty());
+        ASSERT_TRUE(untitled_dirty.file_path().empty());
+        ASSERT_FALSE(untitled_dirty.save(blocker_file / "cannot_create.aveproj"));
+        ASSERT_TRUE(untitled_dirty.is_dirty());
+        ASSERT_TRUE(untitled_dirty.file_path().empty());
+        const std::filesystem::path rescued_file = guarded_dir / "rescued_untitled.aveproj";
+        ASSERT_TRUE(untitled_dirty.save(rescued_file));
+        ASSERT_FALSE(untitled_dirty.is_dirty());
+        ASSERT_EQ(untitled_dirty.file_path(), rescued_file);
     }
 
     // 8. M1.2B MediaPool & MediaAsset Fixtures, Organization Round-Trip & Error Rejection
