@@ -1,0 +1,87 @@
+{
+  "schema_version": "1.1.0",
+  "id": "proj-valid-110",
+  "name": "Valid 1.1.0 Master",
+  "timeline": {
+    "schema_version": "1.1.0",
+    "id": "tl-valid-110",
+    "name": "Broadcast 23.976",
+    "frame_rate": { "num": 24000, "den": 1001 },
+    "width": 3840,
+    "height": 2160,
+    "sample_rate": 96000,
+    "duration": { "num": 1001, "den": 240 },
+    "video_tracks": [
+      {
+        "id": "v1-110",
+        "name": "Picture Main",
+        "type": "video",
+        "index": 0,
+        "muted": false,
+        "soloed": true,
+        "locked": true,
+        "items": [
+          {
+            "id": "vitem-110-1",
+            "clip_id": "clip-110-a",
+            "asset_id": "asset-110-a",
+            "name": "Opening Plate",
+            "timeline_in": { "num": 1001, "den": 24000 },
+            "duration": { "num": 24024, "den": 6000 },
+            "source_in": { "num": 1001, "den": 3000 },
+            "speed": { "num": 1, "den": 1 },
+            "enabled": false,
+            "transform_x": -120.5,
+            "transform_y": 64.25,
+            "scale_x": 1.5,
+            "scale_y": 1.25,
+            "rotation": -7.5,
+            "anchor_x": 0.25,
+            "anchor_y": 0.75,
+            "opacity": 0.75,
+            "blend_mode": "Screen"
+          }
+        ]
+      }
+    ],
+    "audio_tracks": [
+      {
+        "id": "a1-110",
+        "name": "Stem Mix",
+        "type": "audio",
+        "index": 0,
+        "muted": false,
+        "soloed": false,
+        "locked": true,
+        "items": [
+          {
+            "id": "aitem-110-1",
+            "clip_id": "clip-110-b",
+            "asset_id": "asset-110-b",
+            "name": "Music Bed",
+            "timeline_in": { "num": 0, "den": 1 },
+            "duration": { "num": 1001, "den": 240 },
+            "source_in": { "num": 0, "den": 1 },
+            "speed": { "num": 1, "den": 1 },
+            "enabled": true,
+            "transform_x": 0.0,
+            "transform_y": 0.0,
+            "scale_x": 1.0,
+            "scale_y": 1.0,
+            "rotation": 0.0,
+            "anchor_x": 0.5,
+            "anchor_y": 0.5,
+            "opacity": 1.0,
+            "blend_mode": "Over"
+          }
+        ]
+      }
+    ]
+  },
+  "media_pool": {
+    "assets": [],
+    "bins": [],
+    "clips": []
+  }
+}
+

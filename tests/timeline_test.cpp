@@ -1,6 +1,8 @@
 #include "ave/timeline.hpp"
 #include <iostream>
 #include <cassert>
+#include <cmath>
+#include <stdexcept>
 
 #define ASSERT_TRUE(cond) \
     do { \
@@ -209,6 +211,12 @@ int main() {
 
         std::string json = tl.to_json();
         ASSERT_TRUE(!json.empty());
+        ASSERT_TRUE(json.find("\"schema_version\"") != std::string::npos);
+        ASSERT_TRUE(json.find("\"1.1.0\"") != std::string::npos);
+        ASSERT_TRUE(json.find("\"duration\"") != std::string::npos);
+        ASSERT_TRUE(json.find("\"soloed\"") != std::string::npos);
+        ASSERT_TRUE(json.find("\"locked\"") != std::string::npos);
+        ASSERT_TRUE(json.find("\"enabled\"") != std::string::npos);
 
         ave::Timeline restored = ave::Timeline::from_json(json);
         ASSERT_EQ(restored.id(), "tl-json");
@@ -228,6 +236,92 @@ int main() {
         ASSERT_TRUE(std::abs(rest_item.opacity() - 0.85f) < 0.001f);
         ASSERT_EQ(rest_item.blend_mode(), "Screen");
         ASSERT_TRUE(rest_item.has_transform());
+        ASSERT_EQ(restored, tl);
+    }
+
+    // 6. Extended JSON roundtrip (track flags, enabled, special chars/Unicode) & strict validation
+    {
+        ave::Timeline tl("tl-rich", "Master \"Cut\"\nSeq\t— 編集", ave::Rational{24000, 1001}, 3840, 2160, 96000);
+        auto* v1 = tl.find_track_mut(tl.video_tracks()[0].id());
+        auto* a1 = tl.find_track_mut(tl.audio_tracks()[0].id());
+        ASSERT_TRUE(v1 != nullptr && a1 != nullptr);
+        v1->set_name("Track \\ \"V1\"");
+        v1->set_soloed(true);
+        v1->set_locked(true);
+        a1->set_muted(true);
+
+        ave::TimelineItem vitem("rich-v1", "clip-r1", "asset-r1",
+                                "D:\\Footage\\Take \"A\"\\shot_01_最終.mov\nLine2\tOK",
+                                ave::Rational{1001, 24000}, ave::Rational{1001, 240},
+                                ave::Rational{1001, 3000}, ave::Rational{3, 2});
+        vitem.set_enabled(false);
+        vitem.set_transform(-12.5f, 34.25f);
+        vitem.set_scale(1.25f, 0.8f);
+        vitem.set_rotation(-15.0f);
+        vitem.set_anchor(0.1f, 0.9f);
+        vitem.set_opacity(0.6f);
+        vitem.set_blend_mode("Multiply");
+        ASSERT_TRUE(v1->add_item(std::move(vitem)));
+
+        ave::TimelineItem aitem("rich-a1", "clip-r2", "asset-r2", "Dialogue — हिन्दी",
+                                ave::Rational{0, 1}, ave::Rational{5, 1},
+                                ave::Rational{0, 1}, ave::Rational{1, 1});
+        ASSERT_TRUE(a1->add_item(std::move(aitem)));
+
+        const std::string encoded = tl.to_json();
+        const ave::Timeline decoded = ave::Timeline::from_json(encoded);
+        ASSERT_EQ(decoded, tl);
+        ASSERT_EQ(decoded.video_tracks()[0].soloed(), true);
+        ASSERT_EQ(decoded.video_tracks()[0].locked(), true);
+        ASSERT_EQ(decoded.audio_tracks()[0].muted(), true);
+        ASSERT_EQ(decoded.video_tracks()[0].items()[0].enabled(), false);
+        ASSERT_EQ(decoded.duration(), tl.duration());
+
+        auto expect_throw = [](const std::string& bad_json) {
+            bool threw = false;
+            try {
+                (void)ave::Timeline::from_json(bad_json);
+            } catch (const std::exception&) {
+                threw = true;
+            }
+            return threw;
+        };
+
+        // Malformed JSON
+        ASSERT_TRUE(expect_throw("{not valid json"));
+        // Unsupported schema version
+        ASSERT_TRUE(expect_throw(R"({"schema_version":"9.9.0","frame_rate":{"num":24,"den":1}})"));
+        // Float instead of integer inside Rational
+        ASSERT_TRUE(expect_throw(R"({"schema_version":"1.1.0","frame_rate":{"num":23.976,"den":1}})"));
+        // Zero denominator in Rational
+        ASSERT_TRUE(expect_throw(R"({"schema_version":"1.1.0","frame_rate":{"num":24,"den":0}})"));
+        // Out-of-range opacity
+        ASSERT_TRUE(expect_throw(R"({
+            "schema_version":"1.1.0",
+            "frame_rate":{"num":24,"den":1},
+            "video_tracks":[{
+                "id":"v1","type":"video",
+                "items":[{"id":"i1","timeline_in":{"num":0,"den":1},"duration":{"num":1,"den":1},"source_in":{"num":0,"den":1},"opacity":1.5}]
+            }]
+        })"));
+        // Track type mismatch
+        ASSERT_TRUE(expect_throw(R"({
+            "schema_version":"1.1.0",
+            "frame_rate":{"num":24,"den":1},
+            "video_tracks":[{"id":"v1","type":"audio","items":[]}]
+        })"));
+        // Overlapping items on track
+        ASSERT_TRUE(expect_throw(R"({
+            "schema_version":"1.1.0",
+            "frame_rate":{"num":24,"den":1},
+            "video_tracks":[{
+                "id":"v1","type":"video",
+                "items":[
+                    {"id":"i1","timeline_in":{"num":0,"den":1},"duration":{"num":4,"den":1},"source_in":{"num":0,"den":1}},
+                    {"id":"i2","timeline_in":{"num":2,"den":1},"duration":{"num":4,"den":1},"source_in":{"num":0,"den":1}}
+                ]
+            }]
+        })"));
     }
 
     std::cout << "[TimelineTest] All timeline model assertions passed!" << std::endl;

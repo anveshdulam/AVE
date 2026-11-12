@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.1.0",
+  "id": "proj-unicode-special",
+  "name": "Cinematic Edit — \"Final Cut\" 日本語 / हिन्दी",
+  "timeline": {
+    "schema_version": "1.1.0",
+    "id": "tl-unicode",
+    "name": "Seq: \"Scene\\Take_01\"\nLine2\tTabbed",
+    "frame_rate": { "num": 25, "den": 1 },
+    "width": 1920,
+    "height": 1080,
+    "sample_rate": 48000,
+    "duration": { "num": 6, "den": 1 },
+    "video_tracks": [
+      {
+        "id": "v1-uni",
+        "name": "Track \\\"Alpha\\\" — 映像",
+        "type": "video",
+        "index": 0,
+        "muted": false,
+        "soloed": false,
+        "locked": false,
+        "items": [
+          {
+            "id": "item-uni-1",
+            "clip_id": "clip-uni",
+            "asset_id": "asset-uni",
+            "name": "D:\\Footage\\Take \"A\"\\shot_01_最終.mov\nNote:\tOK",
+            "timeline_in": { "num": 0, "den": 1 },
+            "duration": { "num": 6, "den": 1 },
+            "source_in": { "num": 0, "den": 1 },
+            "speed": { "num": 1, "den": 1 },
+            "enabled": true,
+            "transform_x": 0.0,
+            "transform_y": 0.0,
+            "scale_x": 1.0,
+            "scale_y": 1.0,
+            "rotation": 0.0,
+            "anchor_x": 0.5,
+            "anchor_y": 0.5,
+            "opacity": 1.0,
+            "blend_mode": "Over"
+          }
+        ]
+      }
+    ],
+    "audio_tracks": []
+  },
+  "media_pool": {
+    "assets": [],
+    "bins": [],
+    "clips": []
+  }
+}
+

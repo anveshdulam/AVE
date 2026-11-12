@@ -1,5 +1,7 @@
 #include "ave/project.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -41,131 +43,132 @@ CommandResult Project::redo() {
 }
 
 std::string Project::to_json() const {
-    std::ostringstream ss;
-    ss << "{\n";
-    ss << "  \"schema_version\": \"" << schema_version_ << "\",\n";
-    ss << "  \"id\": \"" << id_ << "\",\n";
-    ss << "  \"name\": \"" << name_ << "\",\n";
-    ss << "  \"timeline\": " << timeline_.to_json() << ",\n";
-    ss << "  \"media_pool\": " << media_pool_.to_json() << "\n";
-    ss << "}";
-    return ss.str();
+    nlohmann::json root;
+    root["schema_version"] = schema_version_;
+    root["id"] = id_;
+    root["name"] = name_;
+    root["timeline"] = nlohmann::json::parse(timeline_.to_json());
+    root["media_pool"] = nlohmann::json::parse(media_pool_.to_json());
+    return root.dump(2);
 }
-
-namespace {
-
-std::string proj_extract_string(const std::string& json, const std::string& key) {
-    std::string needle = "\"" + key + "\":";
-    size_t pos = json.find(needle);
-    if (pos == std::string::npos) return "";
-    pos += needle.length();
-    while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) {
-        pos++;
-    }
-    if (pos >= json.length() || json[pos] != '"') return "";
-    pos++;
-    std::string result;
-    while (pos < json.length()) {
-        if (json[pos] == '\\' && pos + 1 < json.length()) {
-            pos++;
-            switch (json[pos]) {
-                case '"': result += '"'; break;
-                case '\\': result += '\\'; break;
-                case 'n': result += '\n'; break;
-                case 'r': result += '\r'; break;
-                case 't': result += '\t'; break;
-                default: result += json[pos]; break;
-            }
-        } else if (json[pos] == '"') {
-            break;
-        } else {
-            result += json[pos];
-        }
-        pos++;
-    }
-    return result;
-}
-
-std::string extract_subobject(const std::string& json, const std::string& key) {
-    std::string needle = "\"" + key + "\":";
-    size_t pos = json.find(needle);
-    if (pos == std::string::npos) return "";
-    size_t start = json.find('{', pos);
-    if (start == std::string::npos) return "";
-
-    int count = 0;
-    size_t end = start;
-    for (; end < json.length(); ++end) {
-        if (json[end] == '{') count++;
-        else if (json[end] == '}') {
-            count--;
-            if (count == 0) break;
-        }
-    }
-    if (count != 0) return "";
-    return json.substr(start, end - start + 1);
-}
-
-} // namespace
 
 Project Project::from_json(const std::string& json_text) {
-    std::string ver = proj_extract_string(json_text, "schema_version");
-    std::string id = proj_extract_string(json_text, "id");
-    std::string name = proj_extract_string(json_text, "name");
-
-    Project proj(id.empty() ? UUID::generate() : id,
-                 name.empty() ? "Untitled Project" : name,
-                 ver.empty() ? CURRENT_SCHEMA_VERSION : ver);
-
-    std::string tl_json = extract_subobject(json_text, "timeline");
-    if (!tl_json.empty()) {
-        proj.timeline_ = Timeline::from_json(tl_json);
+    nlohmann::json root;
+    try {
+        root = nlohmann::json::parse(json_text);
+    } catch (const nlohmann::json::parse_error& e) {
+        throw std::runtime_error(std::string("Project JSON parse error: ") + e.what());
     }
 
-    std::string mp_json = extract_subobject(json_text, "media_pool");
-    if (!mp_json.empty()) {
-        proj.media_pool_ = MediaPool::from_json(mp_json);
+    if (!root.is_object()) {
+        throw std::runtime_error("Project validation error: root JSON value must be an object");
     }
 
+    if (!root.contains("schema_version") || !root.at("schema_version").is_string()) {
+        throw std::runtime_error("Project validation error: missing or invalid 'schema_version' string");
+    }
+    const std::string source_version = root.at("schema_version").get<std::string>();
+    if (source_version.empty()) {
+        throw std::runtime_error("Project validation error: 'schema_version' must not be empty");
+    }
+
+    const bool is_legacy_1_0 = (source_version == LEGACY_SCHEMA_VERSION_1_0);
+    const bool is_current_1_1 = (source_version == CURRENT_SCHEMA_VERSION);
+    if (!is_legacy_1_0 && !is_current_1_1) {
+        throw std::runtime_error(
+            "Project migration error: unsupported schema_version '" + source_version +
+            "' (supported versions: 1.0.0, 1.1.0)");
+    }
+
+    std::string id;
+    if (root.contains("id")) {
+        if (!root.at("id").is_string()) {
+            throw std::runtime_error("Project validation error: 'id' must be a string");
+        }
+        id = root.at("id").get<std::string>();
+    }
+    if (id.empty()) {
+        id = UUID::generate();
+    }
+
+    std::string name;
+    if (root.contains("name")) {
+        if (!root.at("name").is_string()) {
+            throw std::runtime_error("Project validation error: 'name' must be a string");
+        }
+        name = root.at("name").get<std::string>();
+    }
+    if (name.empty()) {
+        name = "Untitled Project";
+    }
+
+    if (!root.contains("timeline") || !root.at("timeline").is_object()) {
+        throw std::runtime_error("Project validation error: missing or invalid 'timeline' object");
+    }
+
+    Timeline parsed_timeline = Timeline::from_json(root.at("timeline").dump());
+
+    MediaPool parsed_pool;
+    parsed_pool = MediaPool::from_json("{}");
+    if (root.contains("media_pool")) {
+        if (!root.at("media_pool").is_object()) {
+            throw std::runtime_error("Project validation error: 'media_pool' must be an object");
+        }
+        parsed_pool = MediaPool::from_json(root.at("media_pool").dump());
+    }
+
+    // Legacy 1.0.0 projects deterministically migrate up to CURRENT_SCHEMA_VERSION (1.1.0).
+    Project proj(std::move(id), std::move(name), CURRENT_SCHEMA_VERSION);
+    proj.timeline_ = std::move(parsed_timeline);
+    proj.media_pool_ = std::move(parsed_pool);
     return proj;
 }
 
 bool Project::save(const std::filesystem::path& destination_path) {
-    std::filesystem::path target = destination_path.empty() ? file_path_ : destination_path;
+    const std::filesystem::path target = destination_path.empty() ? file_path_ : destination_path;
     if (target.empty()) {
         return false;
     }
 
-    // Ensure parent directory exists
+    // Serialize in memory before touching disk so serialization errors cannot corrupt files.
+    std::string serialized;
+    try {
+        serialized = to_json();
+    } catch (...) {
+        return false;
+    }
+
+    std::error_code ec;
     if (target.has_parent_path()) {
-        std::filesystem::create_directories(target.parent_path());
+        std::filesystem::create_directories(target.parent_path(), ec);
+        if (ec) {
+            return false;
+        }
     }
 
     std::filesystem::path temp_path = target;
     temp_path += ".tmp";
 
     {
-        std::ofstream ofs(temp_path, std::ios::out | std::ios::trunc);
+        std::ofstream ofs(temp_path, std::ios::out | std::ios::binary | std::ios::trunc);
         if (!ofs.is_open()) {
             return false;
         }
-        std::string serialized = to_json();
         ofs.write(serialized.data(), static_cast<std::streamsize>(serialized.size()));
+        ofs.flush();
         if (!ofs.good()) {
+            ofs.close();
+            std::error_code rm_ec;
+            std::filesystem::remove(temp_path, rm_ec);
             return false;
         }
     }
 
-    // Atomic replace
-    std::error_code ec;
     std::filesystem::rename(temp_path, target, ec);
     if (ec) {
-        // Fallback: remove and rename
-        std::filesystem::remove(target, ec);
-        std::filesystem::rename(temp_path, target, ec);
-        if (ec) {
-            return false;
-        }
+        std::error_code rm_ec;
+        std::filesystem::remove(temp_path, rm_ec);
+        return false;
     }
 
     file_path_ = target;
@@ -174,17 +177,24 @@ bool Project::save(const std::filesystem::path& destination_path) {
 }
 
 Project Project::load(const std::filesystem::path& source_path) {
-    if (!std::filesystem::exists(source_path)) {
-        throw std::runtime_error("Project file not found: " + source_path.string());
+    std::error_code ec;
+    if (!std::filesystem::exists(source_path, ec) || ec) {
+        throw std::runtime_error("Project I/O error: file not found: " + source_path.string());
+    }
+    if (!std::filesystem::is_regular_file(source_path, ec) || ec) {
+        throw std::runtime_error("Project I/O error: path is not a regular file: " + source_path.string());
     }
 
-    std::ifstream ifs(source_path);
+    std::ifstream ifs(source_path, std::ios::in | std::ios::binary);
     if (!ifs.is_open()) {
-        throw std::runtime_error("Failed to open project file: " + source_path.string());
+        throw std::runtime_error("Project I/O error: failed to open file: " + source_path.string());
     }
 
     std::ostringstream ss;
     ss << ifs.rdbuf();
+    if (ifs.bad()) {
+        throw std::runtime_error("Project I/O error: failed while reading file: " + source_path.string());
+    }
 
     Project proj = from_json(ss.str());
     proj.file_path_ = source_path;

@@ -197,6 +197,8 @@ public:
     [[nodiscard]] std::string to_json() const;
     [[nodiscard]] static Timeline from_json(const std::string& json_text);
 
+    [[nodiscard]] bool operator==(const Timeline& other) const = default;
+
 private:
     std::string id_{UUID::generate()};
     std::string name_{"Master Sequence"};

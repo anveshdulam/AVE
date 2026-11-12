@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.1.0",
+  "id": "proj-optional-fields",
+  "name": "Minimal Fields Project",
+  "timeline": {
+    "id": "tl-optional",
+    "name": "Minimal Timeline",
+    "frame_rate": { "num": 30, "den": 1 },
+    "video_tracks": [
+      {
+        "id": "v1-min",
+        "items": [
+          {
+            "id": "item-min-1",
+            "timeline_in": { "num": 0, "den": 1 },
+            "duration": { "num": 4, "den": 1 },
+            "source_in": { "num": 1, "den": 2 }
+          }
+        ]
+      }
+    ]
+  }
+}
+

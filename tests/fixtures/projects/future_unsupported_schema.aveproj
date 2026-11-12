@@ -1,0 +1,19 @@
+{
+  "schema_version": "2.5.0",
+  "id": "proj-future",
+  "name": "Future Schema Project",
+  "timeline": {
+    "schema_version": "2.5.0",
+    "id": "tl-future",
+    "name": "Future Seq",
+    "frame_rate": { "num": 60, "den": 1 },
+    "video_tracks": [],
+    "audio_tracks": []
+  },
+  "media_pool": {
+    "assets": [],
+    "bins": [],
+    "clips": []
+  }
+}
+

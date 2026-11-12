@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.0.0",
+  "id": "proj-legacy-100",
+  "name": "Legacy 1.0.0 Project",
+  "timeline": {
+    "id": "tl-legacy-100",
+    "name": "Legacy Sequence",
+    "frame_rate": { "num": 24, "den": 1 },
+    "width": 1920,
+    "height": 1080,
+    "sample_rate": 48000,
+    "video_tracks": [
+      {
+        "id": "v1-legacy",
+        "name": "V1",
+        "type": "video",
+        "index": 0,
+        "muted": false,
+        "items": [
+          {
+            "id": "vitem-legacy-1",
+            "clip_id": "clip-l1",
+            "asset_id": "asset-l1",
+            "name": "Legacy Hero",
+            "timeline_in": { "num": 0, "den": 1 },
+            "duration": { "num": 5, "den": 1 },
+            "source_in": { "num": 2, "den": 1 },
+            "speed": { "num": 3, "den": 2 },
+            "transform_x": 25.5,
+            "transform_y": -12.0,
+            "scale_x": 1.25,
+            "scale_y": 0.9,
+            "rotation": 15.0,
+            "anchor_x": 0.3,
+            "anchor_y": 0.7,
+            "opacity": 0.85,
+            "blend_mode": "Add"
+          }
+        ]
+      }
+    ],
+    "audio_tracks": [
+      {
+        "id": "a1-legacy",
+        "name": "A1",
+        "type": "audio",
+        "index": 0,
+        "muted": true,
+        "items": [
+          {
+            "id": "aitem-legacy-1",
+            "clip_id": "clip-l2",
+            "asset_id": "asset-l2",
+            "name": "Legacy Dialogue",
+            "timeline_in": { "num": 1, "den": 2 },
+            "duration": { "num": 9, "den": 2 },
+            "source_in": { "num": 0, "den": 1 },
+            "speed": { "num": 1, "den": 1 }
+          }
+        ]
+      }
+    ]
+  },
+  "media_pool": {
+    "assets": [],
+    "bins": [],
+    "clips": []
+  }
+}
+
