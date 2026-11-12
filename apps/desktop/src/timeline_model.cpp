@@ -3,6 +3,7 @@
 #include "ave/asset_relinker.hpp"
 #include "ave/media_asset.hpp"
 #include "ave/media_cache.hpp"
+#include "ave/media_extractor.hpp"
 #include "ave/media_pool.hpp"
 #include "ave/otio_interchange.hpp"
 #include "ave/playback_snapshot.hpp"
@@ -17,12 +18,14 @@
 #include <filesystem>
 #include <fstream>
 #include <system_error>
+#include <unordered_set>
 #include <utility>
 
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QMetaObject>
 #include <QPointer>
 #include <QUrl>
 
@@ -186,6 +189,27 @@ void TimelineClipListModel::update_selection(const QString& selected_clip_id) {
     }
 }
 
+void TimelineClipListModel::update_waveforms_for_asset(
+    const QString& asset_id,
+    const std::function<QVariantList(double source_in_sec, double source_span_sec)>& builder) {
+    if (asset_id.isEmpty() || !builder) {
+        return;
+    }
+    for (std::size_t i = 0; i < rows_.size(); ++i) {
+        if (rows_[i].asset_id != asset_id) {
+            continue;
+        }
+        QVariantList next_peaks = builder(rows_[i].source_in_sec, rows_[i].source_span_sec);
+        const bool next_has = !next_peaks.isEmpty();
+        if (rows_[i].has_waveform != next_has || rows_[i].waveform_peaks != next_peaks) {
+            rows_[i].waveform_peaks = std::move(next_peaks);
+            rows_[i].has_waveform = next_has;
+            const QModelIndex idx = index(static_cast<int>(i), 0);
+            emit dataChanged(idx, idx, { HasWaveformRole, WaveformPeaksRole });
+        }
+    }
+}
+
 // --- TimelineModel ---
 
 TimelineModel::TimelineModel(ave::Project& project,
@@ -216,6 +240,8 @@ TimelineModel::TimelineModel(ave::Project& project,
 }
 
 TimelineModel::~TimelineModel() {
+    alive_flag_->store(false, std::memory_order_release);
+    shutdown_waveform_hydration();
     unbind_project_listener();
 }
 
@@ -818,9 +844,13 @@ void TimelineModel::sync_from_project(bool emit_reload_signal, bool force_rebuil
 }
 
 void TimelineModel::rebuild_models() {
+    cancel_waveform_hydration();
+
     const ave::Timeline& tl = project_.timeline();
     std::vector<TimelineTrackListModel::TrackRow> track_rows;
     std::vector<TimelineClipListModel::ClipRow> clip_rows;
+    std::vector<ave::MediaAsset> assets_to_hydrate;
+    std::unordered_set<std::string> queued_asset_ids;
 
     const std::size_t total_tracks = tl.video_tracks().size() + tl.audio_tracks().size();
     track_rows.reserve(total_tracks);
@@ -846,11 +876,19 @@ void TimelineModel::rebuild_models() {
                 crow.timeline_in_sec = item.timeline_in().to_seconds();
                 crow.duration_sec = item.duration().to_seconds();
                 crow.source_in_sec = item.source_in().to_seconds();
+                crow.source_span_sec = (item.source_out() - item.source_in()).to_seconds();
                 crow.track_row = track_row_index;
                 crow.is_selected = (!selected_clip_id_.isEmpty() && crow.clip_id == selected_clip_id_);
-                const double source_span_sec = (item.source_out() - item.source_in()).to_seconds();
-                crow.waveform_peaks = build_waveform_peaks(item.asset_id(), crow.source_in_sec, source_span_sec);
+                bool missing_online_cache = false;
+                crow.waveform_peaks = build_waveform_peaks(
+                    item.asset_id(), crow.source_in_sec, crow.source_span_sec, &missing_online_cache);
                 crow.has_waveform = !crow.waveform_peaks.isEmpty();
+                if (missing_online_cache && !item.asset_id().empty() &&
+                    queued_asset_ids.insert(item.asset_id()).second) {
+                    if (const ave::MediaAsset* asset = project_.media_pool().find_asset(item.asset_id())) {
+                        assets_to_hydrate.push_back(*asset);
+                    }
+                }
                 clip_rows.push_back(std::move(crow));
             }
 
@@ -867,17 +905,54 @@ void TimelineModel::rebuild_models() {
     if (clips_model_) {
         clips_model_->set_rows(std::move(clip_rows));
     }
+    if (!assets_to_hydrate.empty() && media_cache_) {
+        schedule_waveform_hydration(std::move(assets_to_hydrate));
+    }
 }
 
 QVariantList TimelineModel::build_waveform_peaks(const std::string& asset_id,
                                                  double source_in_sec,
-                                                 double source_span_sec) const {
+                                                 double source_span_sec,
+                                                 bool* missing_online_cache_out) const {
+    if (missing_online_cache_out) {
+        *missing_online_cache_out = false;
+    }
     if (!media_cache_ || asset_id.empty()) {
         return {};
     }
 
-    const std::optional<ave::WaveformData> wf = media_cache_->get_waveform(asset_id);
+    const ave::MediaAsset* asset = project_.media_pool().find_asset(asset_id);
+    std::optional<ave::WaveformData> wf;
+    if (asset != nullptr) {
+        wf = media_cache_->get_waveform_memory_only(*asset, 100);
+        if (!wf.has_value()) {
+            std::error_code ec;
+            const bool file_exists = !asset->file_path().empty() &&
+                                     std::filesystem::exists(asset->file_path(), ec) && !ec;
+            if (file_exists && asset->primary_audio_stream() != nullptr) {
+                if (missing_online_cache_out) {
+                    *missing_online_cache_out = true;
+                }
+                return {};
+            }
+            if (!file_exists) {
+                wf = media_cache_->get_waveform(asset_id);
+            }
+        }
+    } else {
+        wf = media_cache_->get_waveform(asset_id);
+    }
+
     if (!wf.has_value() || !wf->is_valid()) {
+        return {};
+    }
+    return build_waveform_peaks_from_data(&*wf, source_in_sec, source_span_sec);
+}
+
+QVariantList TimelineModel::build_waveform_peaks_from_data(const ave::WaveformData* wf,
+                                                           double source_in_sec,
+                                                           double source_span_sec) {
+    if (!wf || !wf->is_valid()) {
         return {};
     }
 
@@ -946,6 +1021,150 @@ QVariantList TimelineModel::build_waveform_peaks(const std::string& asset_id,
     }
 
     return result;
+}
+
+bool TimelineModel::is_hydrating_waveforms() const noexcept {
+    std::lock_guard<std::mutex> lock(hydration_mutex_);
+    return hydration_active_ || !pending_waveform_assets_.empty();
+}
+
+uint64_t TimelineModel::waveform_hydration_decode_count_for_test() const noexcept {
+    return waveform_decode_count_.load(std::memory_order_relaxed);
+}
+
+void TimelineModel::ensure_hydration_worker_started() {
+    std::lock_guard<std::mutex> lock(hydration_mutex_);
+    if (!hydration_started_ && !hydration_stop_) {
+        hydration_started_ = true;
+        hydration_thread_ = std::thread([this]() { hydration_worker_loop(); });
+    }
+}
+
+void TimelineModel::cancel_waveform_hydration() {
+    std::lock_guard<std::mutex> lock(hydration_mutex_);
+    ++hydration_generation_;
+    pending_waveform_assets_.clear();
+    if (hydration_cancel_) {
+        hydration_cancel_->store(true, std::memory_order_release);
+    }
+    hydration_cancel_ = std::make_shared<std::atomic<bool>>(false);
+}
+
+void TimelineModel::schedule_waveform_hydration(std::vector<ave::MediaAsset> assets) {
+    if (assets.empty() || !media_cache_ || !alive_flag_->load(std::memory_order_acquire)) {
+        return;
+    }
+    ensure_hydration_worker_started();
+    {
+        std::lock_guard<std::mutex> lock(hydration_mutex_);
+        if (hydration_stop_) {
+            return;
+        }
+        ++hydration_generation_;
+        pending_waveform_assets_ = std::move(assets);
+        if (hydration_cancel_) {
+            hydration_cancel_->store(true, std::memory_order_release);
+        }
+        hydration_cancel_ = std::make_shared<std::atomic<bool>>(false);
+    }
+    hydration_cv_.notify_one();
+}
+
+void TimelineModel::shutdown_waveform_hydration() {
+    {
+        std::lock_guard<std::mutex> lock(hydration_mutex_);
+        hydration_stop_ = true;
+        pending_waveform_assets_.clear();
+        ++hydration_generation_;
+        if (hydration_cancel_) {
+            hydration_cancel_->store(true, std::memory_order_release);
+        }
+    }
+    hydration_cv_.notify_all();
+    if (hydration_thread_.joinable()) {
+        hydration_thread_.join();
+    }
+}
+
+void TimelineModel::hydration_worker_loop() {
+    for (;;) {
+        std::vector<ave::MediaAsset> batch;
+        uint64_t gen = 0;
+        std::shared_ptr<std::atomic<bool>> cancel;
+
+        {
+            std::unique_lock<std::mutex> lock(hydration_mutex_);
+            hydration_active_ = false;
+            hydration_cv_.wait(lock, [this]() {
+                return hydration_stop_ || !pending_waveform_assets_.empty();
+            });
+            if (hydration_stop_) {
+                return;
+            }
+            batch = std::move(pending_waveform_assets_);
+            pending_waveform_assets_.clear();
+            gen = hydration_generation_;
+            cancel = hydration_cancel_;
+            hydration_active_ = true;
+        }
+
+        const std::shared_ptr<ave::MediaCache> cache = media_cache_;
+        const std::shared_ptr<std::atomic<bool>> alive = alive_flag_;
+        QPointer<TimelineModel> self(this);
+
+        for (const ave::MediaAsset& asset : batch) {
+            if (!alive || !alive->load(std::memory_order_acquire) ||
+                (cancel && cancel->load(std::memory_order_acquire)) ||
+                !cache) {
+                break;
+            }
+
+            std::optional<ave::WaveformData> wf = cache->get_or_extract_waveform(
+                asset,
+                100,
+                [this, &asset](const std::shared_ptr<std::atomic<bool>>& cs) {
+                    waveform_decode_count_.fetch_add(1, std::memory_order_relaxed);
+                    return ave::WaveformExtractor::extract(asset.file_path(), 100, cs);
+                },
+                cancel);
+
+            if (!wf.has_value() || !wf->is_valid() ||
+                (cancel && cancel->load(std::memory_order_acquire)) ||
+                !alive->load(std::memory_order_acquire)) {
+                continue;
+            }
+
+            const QString asset_id_q = QString::fromStdString(asset.id());
+            QMetaObject::invokeMethod(
+                this,
+                [self, alive, gen, asset_id_q, wf_copy = std::move(*wf)]() {
+                    if (!alive || !alive->load(std::memory_order_acquire) || self.isNull()) {
+                        return;
+                    }
+                    self->apply_hydrated_waveform(gen, asset_id_q, wf_copy);
+                },
+                Qt::QueuedConnection);
+        }
+    }
+}
+
+void TimelineModel::apply_hydrated_waveform(uint64_t generation,
+                                            const QString& asset_id,
+                                            const ave::WaveformData& wf) {
+    if (!alive_flag_->load(std::memory_order_acquire) || !clips_model_) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(hydration_mutex_);
+        if (generation != hydration_generation_) {
+            return;
+        }
+    }
+    clips_model_->update_waveforms_for_asset(
+        asset_id,
+        [&wf](double source_in_sec, double source_span_sec) {
+            return build_waveform_peaks_from_data(&wf, source_in_sec, source_span_sec);
+        });
 }
 
 bool TimelineModel::replace_active_project(ave::Project next_project) {

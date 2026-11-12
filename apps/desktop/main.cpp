@@ -13,6 +13,7 @@
 #include <QQmlError>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QStandardPaths>
 #include <QUrl>
 
 #include "ave/ai_studio_service.hpp"
@@ -174,6 +175,18 @@ int run_smoke_test() {
     return 0;
 }
 
+std::filesystem::path default_persistent_media_cache_dir() {
+    const QString cache_loc = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    if (!cache_loc.trimmed().isEmpty()) {
+        return std::filesystem::path(cache_loc.toStdWString()) / "media";
+    }
+    const QString app_data = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (!app_data.trimmed().isEmpty()) {
+        return std::filesystem::path(app_data.toStdWString()) / "cache" / "media";
+    }
+    return std::filesystem::temp_directory_path() / "ave_desktop_cache";
+}
+
 class DesktopShellRuntime {
 public:
     DesktopShellRuntime() = default;
@@ -194,9 +207,15 @@ public:
             project_->timeline(), project_->media_pool());
         vulkan_device_ = ave::VulkanDevice::create(false);
         frame_hub_ = std::make_shared<ave::FramePresentationHub>();
-        media_cache_ = std::make_shared<ave::MediaCache>(
-            std::filesystem::temp_directory_path() / "ave_desktop_cache");
-        import_queue_ = std::make_shared<ave::MediaImportQueue>();
+        if (verify_qml_only) {
+            verify_cache_dir_ = std::filesystem::temp_directory_path() /
+                ("ave_qml_verify_cache_" + std::to_string(QCoreApplication::applicationPid()));
+            media_cache_ = std::make_shared<ave::MediaCache>(verify_cache_dir_);
+        } else {
+            media_cache_ = std::make_shared<ave::MediaCache>(default_persistent_media_cache_dir());
+        }
+        import_queue_ = std::make_shared<ave::MediaImportQueue>(
+            ave::MediaImportQueue::WorkFn{}, media_cache_);
 
         ave::PlaybackSessionConfig cfg;
         cfg.max_preview_width = ave::kDefaultPreviewWidth;
@@ -345,6 +364,11 @@ public:
             std::filesystem::remove_all(verify_recovery_dir_, ec);
             verify_recovery_dir_.clear();
         }
+        if (!verify_cache_dir_.empty()) {
+            std::error_code ec;
+            std::filesystem::remove_all(verify_cache_dir_, ec);
+            verify_cache_dir_.clear();
+        }
         initialized_ = false;
     }
 
@@ -356,6 +380,7 @@ public:
 private:
     bool initialized_{false};
     std::filesystem::path verify_recovery_dir_{};
+    std::filesystem::path verify_cache_dir_{};
     std::unique_ptr<ave::Project> project_;
     std::shared_ptr<ave::PlaybackSnapshotStore> snapshot_store_;
     std::shared_ptr<ave::VulkanDevice> vulkan_device_;

@@ -71,11 +71,26 @@ public:
     using CompletionCallback = std::function<void(ImportJobResult)>;
     using CountsCallback = std::function<void(ImportQueueCounts)>;
 
-    explicit MediaImportQueue(WorkFn work_fn = {});
+    struct Diagnostics {
+        uint64_t probe_decodes{0};
+        uint64_t probe_cache_hits{0};
+        uint64_t thumbnail_decodes{0};
+        uint64_t thumbnail_cache_hits{0};
+        uint64_t waveform_decodes{0};
+        uint64_t waveform_cache_hits{0};
+    };
+
+    explicit MediaImportQueue(WorkFn work_fn = {},
+                              std::shared_ptr<MediaCache> media_cache = nullptr);
     ~MediaImportQueue();
 
     MediaImportQueue(const MediaImportQueue&) = delete;
     MediaImportQueue& operator=(const MediaImportQueue&) = delete;
+
+    void set_media_cache(std::shared_ptr<MediaCache> media_cache);
+    [[nodiscard]] std::shared_ptr<MediaCache> media_cache() const;
+    [[nodiscard]] Diagnostics diagnostics() const noexcept;
+    void reset_diagnostics() noexcept;
 
     void set_callbacks(CompletionCallback on_completed, CountsCallback on_counts_changed);
     void clear_callbacks();
@@ -122,12 +137,24 @@ private:
     };
 
     void worker_loop();
+    [[nodiscard]] WorkOutput execute_default_import(
+        const std::filesystem::path& file_path,
+        const std::shared_ptr<std::atomic<bool>>& cancel_state);
     [[nodiscard]] ImportQueueCounts snapshot_counts_locked() const noexcept;
     [[nodiscard]] ImportQueueCounts advance_and_snapshot_counts_locked() noexcept;
     void erase_pending_locked(const std::string& job_id);
 
     WorkFn work_fn_{};
+    bool uses_custom_work_fn_{false};
+    std::shared_ptr<MediaCache> media_cache_{};
     std::shared_ptr<std::atomic<bool>> model_alive_{std::make_shared<std::atomic<bool>>(true)};
+
+    std::atomic<uint64_t> probe_decodes_{0};
+    std::atomic<uint64_t> probe_cache_hits_{0};
+    std::atomic<uint64_t> thumbnail_decodes_{0};
+    std::atomic<uint64_t> thumbnail_cache_hits_{0};
+    std::atomic<uint64_t> waveform_decodes_{0};
+    std::atomic<uint64_t> waveform_cache_hits_{0};
 
     mutable std::mutex mutex_{};
     std::condition_variable cv_{};

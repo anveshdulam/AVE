@@ -1,8 +1,12 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
+#include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <QAbstractListModel>
@@ -71,6 +75,9 @@ public:
     Q_INVOKABLE void    reloadFromProject();
     Q_INVOKABLE void    shutdown();
 
+    [[nodiscard]] bool is_hydrating() const noexcept;
+    [[nodiscard]] uint64_t hydration_decode_count_for_test() const noexcept;
+
 signals:
     void assetCountChanged();
     void isImportingChanged();
@@ -98,6 +105,12 @@ private:
     void upsert_asset_row(const ave::MediaAsset& asset, const ave::ThumbnailData* thumbnail);
     void apply_import_counts(const ave::ImportQueueCounts& counts, bool emit_signals);
     void handle_import_completed(ave::ImportJobResult result);
+    void schedule_thumbnail_hydration(std::vector<ave::MediaAsset> assets);
+    void cancel_hydration();
+    void hydration_worker_loop();
+    void apply_hydrated_thumbnail(uint64_t generation,
+                                  const QString& asset_id,
+                                  const QString& data_url);
     void set_last_import_error(const QString& message);
     void sync_counts_immediately();
 
@@ -113,6 +126,16 @@ private:
     QString last_import_error_{};
     std::atomic<bool> shutting_down_{false};
     bool in_destructor_{false};
+
+    mutable std::mutex hydration_mutex_{};
+    std::condition_variable hydration_cv_{};
+    bool hydration_stop_{false};
+    bool hydration_active_{false};
+    uint64_t hydration_generation_{0};
+    std::vector<ave::MediaAsset> pending_hydration_assets_{};
+    std::shared_ptr<std::atomic<bool>> hydration_cancel_{std::make_shared<std::atomic<bool>>(false)};
+    std::atomic<uint64_t> hydration_decode_count_{0};
+    std::thread hydration_thread_{};
 };
 
 } // namespace ave::desktop

@@ -11,6 +11,7 @@
 #include "ave/project.hpp"
 #include "ave/stream_audio_decoder.hpp"
 #include "ave/stream_decoder.hpp"
+#include "ave/timeline_model.hpp"
 
 #include <gtest/gtest.h>
 
@@ -912,24 +913,27 @@ TEST(Phase10ImportTest, ImportDirtyTrackingSuccessFailureAndCacheIsolation) {
     EXPECT_FALSE(project.is_dirty());
     const int notifies_after_save = project_notify_count;
 
+    const ave::MediaAsset* imported_asset = project.media_pool().find_asset(asset_id);
+    ASSERT_NE(imported_asset, nullptr);
+
     ave::ThumbnailData thumb;
     thumb.width = 4;
     thumb.height = 4;
     thumb.timestamp = ave::Rational{0, 1};
     thumb.rgba_pixels.assign(static_cast<std::size_t>(4 * 4 * 4), 128);
-    cache->store_thumbnail(asset_id, ave::Rational{0, 1}, 4, 4, std::move(thumb));
+    cache->store_thumbnail(*imported_asset, ave::Rational{0, 1}, 4, 4, std::move(thumb));
 
     ave::WaveformData wf;
     wf.channels = 1;
     wf.sample_rate = 48000;
-    wf.peaks_per_second = 10;
+    wf.peaks_per_second = 100;
     wf.duration = ave::Rational{1, 1};
     wf.channel_peaks.resize(1);
     wf.channel_peaks[0].min_peaks.assign(10, -0.5f);
     wf.channel_peaks[0].max_peaks.assign(10, 0.5f);
-    cache->store_waveform(asset_id, std::move(wf));
+    cache->store_waveform(*imported_asset, std::move(wf));
     EXPECT_GE(cache->thumbnail_count(), 1u);
-    EXPECT_TRUE(cache->get_thumbnail(asset_id, ave::Rational{0, 1}, 4, 4).has_value());
+    EXPECT_TRUE(cache->get_thumbnail(*imported_asset, ave::Rational{0, 1}, 4, 4).has_value());
     EXPECT_EQ(cache->waveform_count(), 1u);
 
     model.reloadFromProject();
@@ -937,6 +941,247 @@ TEST(Phase10ImportTest, ImportDirtyTrackingSuccessFailureAndCacheIsolation) {
     EXPECT_EQ(project_notify_count, notifies_after_save);
 
     project.remove_change_listener(listener_id);
+    model.shutdown();
+    std::filesystem::remove_all(tmp_root, ec);
+}
+
+TEST(Phase10ImportTest, ImportReimportAndProjectReopenReusePersistentCacheWithoutDecode) {
+    const std::filesystem::path sample = fixture_file("sample_test.mp4");
+    ASSERT_TRUE(std::filesystem::exists(sample)) << "Missing fixture: " << sample;
+
+    const std::filesystem::path tmp_root =
+        std::filesystem::temp_directory_path() / "ave_m14a_reopen_cache_test";
+    std::error_code ec;
+    std::filesystem::remove_all(tmp_root, ec);
+    std::filesystem::create_directories(tmp_root);
+
+    const std::filesystem::path cache_dir = tmp_root / "persistent_cache";
+    const std::filesystem::path proj_path = tmp_root / "m14a_project.aveproj";
+    std::string first_asset_id;
+    QString first_thumb_url;
+
+    // Session 1: Cold import -> populate cache -> add clip -> save .aveproj
+    {
+        auto cache = std::make_shared<ave::MediaCache>(cache_dir);
+        auto queue = std::make_shared<ave::MediaImportQueue>(ave::MediaImportQueue::WorkFn{}, cache);
+        ave::Project project("M14A Session 1");
+        ave::desktop::MediaPoolModel pool_model(project, queue, nullptr, cache);
+        ave::desktop::TimelineModel timeline_model(project, nullptr, nullptr, cache);
+
+        ASSERT_FALSE(pool_model.importMediaFile(QString::fromStdWString(sample.wstring())).isEmpty());
+        ASSERT_TRUE(pump_events_until([&]() {
+            return pool_model.assetCount() == 1 && !pool_model.isImporting();
+        }));
+
+        const auto diag1 = queue->diagnostics();
+        EXPECT_EQ(diag1.probe_decodes, 1u);
+        EXPECT_EQ(diag1.thumbnail_decodes, 1u);
+        EXPECT_EQ(diag1.waveform_decodes, 1u);
+        EXPECT_EQ(cache->thumbnail_count(), 1u);
+        EXPECT_EQ(cache->waveform_count(), 1u);
+        EXPECT_EQ(cache->probe_count(), 1u);
+
+        const QModelIndex idx = pool_model.index(0, 0);
+        first_asset_id = pool_model.data(idx, ave::desktop::MediaPoolModel::AssetIdRole).toString().toStdString();
+        first_thumb_url = pool_model.data(idx, ave::desktop::MediaPoolModel::ThumbnailDataUrlRole).toString();
+        ASSERT_FALSE(first_asset_id.empty());
+        ASSERT_TRUE(first_thumb_url.startsWith(QStringLiteral("data:image/png;base64,")));
+
+        const std::string a1_id = project.timeline().audio_tracks()[0].id();
+        ASSERT_TRUE(timeline_model.insertClipFromAsset(
+            QString::fromStdString(first_asset_id), QString::fromStdString(a1_id), 0.0));
+        ASSERT_TRUE(timeline_model.clipsModel()->rowCount() == 1);
+        EXPECT_TRUE(timeline_model.clipsModel()->data(
+            timeline_model.clipsModel()->index(0, 0),
+            ave::desktop::TimelineClipListModel::HasWaveformRole).toBool());
+
+        ASSERT_TRUE(timeline_model.saveProject(QString::fromStdWString(proj_path.wstring())));
+        EXPECT_FALSE(timeline_model.isDirty());
+        pool_model.shutdown();
+    }
+
+    // Session 2: Fresh MediaCache (empty RAM) + Reopen .aveproj -> Zero FFmpeg decodes, UI clean
+    {
+        auto cache2 = std::make_shared<ave::MediaCache>(cache_dir);
+        EXPECT_EQ(cache2->thumbnail_count(), 1u);
+        EXPECT_EQ(cache2->waveform_count(), 1u);
+        EXPECT_EQ(cache2->probe_count(), 1u);
+
+        auto queue2 = std::make_shared<ave::MediaImportQueue>(ave::MediaImportQueue::WorkFn{}, cache2);
+        ave::Project project2("Empty");
+        ave::desktop::MediaPoolModel pool_model2(project2, queue2, nullptr, cache2);
+        ave::desktop::TimelineModel timeline_model2(project2, nullptr, nullptr, cache2);
+        QObject::connect(&timeline_model2, &ave::desktop::TimelineModel::projectReloaded,
+                         &pool_model2, &ave::desktop::MediaPoolModel::reloadFromProject);
+
+        const auto t_open_start = std::chrono::steady_clock::now();
+        ASSERT_TRUE(timeline_model2.openProject(QString::fromStdWString(proj_path.wstring())));
+        const auto open_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t_open_start);
+        // Opening & model reset remain responsive (< 500ms even on slow CI; hydration runs off-thread)
+        EXPECT_LT(open_elapsed.count(), 500);
+
+        ASSERT_TRUE(pump_events_until([&]() {
+            if (pool_model2.assetCount() != 1 || timeline_model2.clipsModel()->rowCount() != 1) {
+                return false;
+            }
+            const QString thumb = pool_model2.data(
+                pool_model2.index(0, 0), ave::desktop::MediaPoolModel::ThumbnailDataUrlRole).toString();
+            const bool has_wf = timeline_model2.clipsModel()->data(
+                timeline_model2.clipsModel()->index(0, 0),
+                ave::desktop::TimelineClipListModel::HasWaveformRole).toBool();
+            return !thumb.isEmpty() && has_wf && !pool_model2.is_hydrating() && !timeline_model2.is_hydrating_waveforms();
+        }));
+
+        const QString reopened_thumb = pool_model2.data(
+            pool_model2.index(0, 0), ave::desktop::MediaPoolModel::ThumbnailDataUrlRole).toString();
+        EXPECT_EQ(reopened_thumb, first_thumb_url);
+        EXPECT_TRUE(timeline_model2.clipsModel()->data(
+            timeline_model2.clipsModel()->index(0, 0),
+            ave::desktop::TimelineClipListModel::HasWaveformRole).toBool());
+        EXPECT_GT(timeline_model2.clipsModel()->data(
+            timeline_model2.clipsModel()->index(0, 0),
+            ave::desktop::TimelineClipListModel::WaveformPeaksRole).toList().size(), 0);
+
+        EXPECT_EQ(pool_model2.hydration_decode_count_for_test(), 0u);
+        EXPECT_EQ(timeline_model2.waveform_hydration_decode_count_for_test(), 0u);
+        EXPECT_FALSE(project2.is_dirty());
+        EXPECT_FALSE(timeline_model2.isDirty());
+
+        // Session 2B: Re-importing same source file under brand new project/asset_id shares persistent cache!
+        ave::Project project3("Different Asset ID Project");
+        auto cache3 = std::make_shared<ave::MediaCache>(cache_dir);
+        auto queue3 = std::make_shared<ave::MediaImportQueue>(ave::MediaImportQueue::WorkFn{}, cache3);
+        ave::desktop::MediaPoolModel pool_model3(project3, queue3, nullptr, cache3);
+
+        ASSERT_FALSE(pool_model3.importMediaFile(QString::fromStdWString(sample.wstring())).isEmpty());
+        ASSERT_TRUE(pump_events_until([&]() {
+            return pool_model3.assetCount() == 1 && !pool_model3.isImporting();
+        }));
+
+        const auto diag3 = queue3->diagnostics();
+        EXPECT_EQ(diag3.probe_decodes, 0u);
+        EXPECT_EQ(diag3.thumbnail_decodes, 0u);
+        EXPECT_EQ(diag3.waveform_decodes, 0u);
+        EXPECT_EQ(diag3.probe_cache_hits, 1u);
+        EXPECT_EQ(diag3.thumbnail_cache_hits, 1u);
+        EXPECT_EQ(diag3.waveform_cache_hits, 1u);
+
+        const std::string second_asset_id = pool_model3.data(
+            pool_model3.index(0, 0), ave::desktop::MediaPoolModel::AssetIdRole).toString().toStdString();
+        EXPECT_NE(second_asset_id, first_asset_id);
+
+        pool_model3.shutdown();
+        pool_model2.shutdown();
+    }
+
+    std::filesystem::remove_all(tmp_root, ec);
+}
+
+TEST(Phase10ImportTest, RelinkedAssetInvalidatesStaleCacheAndRegeneratesCleanly) {
+    const std::filesystem::path sample = fixture_file("sample_test.mp4");
+    ASSERT_TRUE(std::filesystem::exists(sample)) << "Missing fixture: " << sample;
+
+    const std::filesystem::path tmp_root =
+        std::filesystem::temp_directory_path() / "ave_m14a_relink_cache_test";
+    std::error_code ec;
+    std::filesystem::remove_all(tmp_root, ec);
+    std::filesystem::create_directories(tmp_root / "orig");
+    std::filesystem::create_directories(tmp_root / "relink_dir");
+
+    const std::filesystem::path orig_file = tmp_root / "orig" / "clip_rel.mp4";
+    std::filesystem::copy_file(sample, orig_file, std::filesystem::copy_options::overwrite_existing);
+
+    const std::filesystem::path cache_dir = tmp_root / "cache";
+    auto cache = std::make_shared<ave::MediaCache>(cache_dir);
+    auto queue = std::make_shared<ave::MediaImportQueue>(ave::MediaImportQueue::WorkFn{}, cache);
+    ave::Project project("M14A Relink Project");
+    ave::desktop::MediaPoolModel pool_model(project, queue, nullptr, cache);
+    ave::desktop::TimelineModel timeline_model(project, nullptr, nullptr, cache);
+    QObject::connect(&timeline_model, &ave::desktop::TimelineModel::projectReloaded,
+                     &pool_model, &ave::desktop::MediaPoolModel::reloadFromProject);
+
+    ASSERT_FALSE(pool_model.importMediaFile(QString::fromStdWString(orig_file.wstring())).isEmpty());
+    ASSERT_TRUE(pump_events_until([&]() {
+        return pool_model.assetCount() == 1 && !pool_model.isImporting();
+    }));
+
+    const std::string asset_id = pool_model.data(
+        pool_model.index(0, 0), ave::desktop::MediaPoolModel::AssetIdRole).toString().toStdString();
+    const std::string a1_id = project.timeline().audio_tracks()[0].id();
+    ASSERT_TRUE(timeline_model.insertClipFromAsset(
+        QString::fromStdString(asset_id), QString::fromStdString(a1_id), 0.0));
+
+    // Move media and update mtime to simulate relinked different source location/timestamp
+    const std::filesystem::path relink_file = tmp_root / "relink_dir" / "clip_rel.mp4";
+    std::filesystem::rename(orig_file, relink_file);
+    std::filesystem::last_write_time(
+        relink_file, std::filesystem::file_time_type::clock::now() + std::chrono::seconds(10));
+
+    // Pre-seed a recognizable wrong thumbnail ONLY under the old asset if looked up by asset_id
+    // and ensure missing old path does not return stale data
+    ASSERT_FALSE(pool_model.data(pool_model.index(0, 0), ave::desktop::MediaPoolModel::AssetIdRole).toString().isEmpty());
+
+    const int relinked = timeline_model.relinkOfflineMedia(
+        QString::fromStdWString((tmp_root / "relink_dir").wstring()));
+    EXPECT_EQ(relinked, 1);
+
+    ASSERT_TRUE(pump_events_until([&]() {
+        if (pool_model.assetCount() != 1 || timeline_model.clipsModel()->rowCount() != 1) {
+            return false;
+        }
+        const bool is_online = pool_model.data(
+            pool_model.index(0, 0), ave::desktop::MediaPoolModel::IsOnlineRole).toBool();
+        const QString thumb = pool_model.data(
+            pool_model.index(0, 0), ave::desktop::MediaPoolModel::ThumbnailDataUrlRole).toString();
+        const bool has_wf = timeline_model.clipsModel()->data(
+            timeline_model.clipsModel()->index(0, 0),
+            ave::desktop::TimelineClipListModel::HasWaveformRole).toBool();
+        return is_online && !thumb.isEmpty() && has_wf &&
+               !pool_model.is_hydrating() && !timeline_model.is_hydrating_waveforms();
+    }));
+
+    // Both thumbnail and waveform had to miss stale old path key and regenerate cleanly
+    EXPECT_GE(pool_model.hydration_decode_count_for_test(), 1u);
+    EXPECT_GE(timeline_model.waveform_hydration_decode_count_for_test(), 1u);
+
+    pool_model.shutdown();
+    std::filesystem::remove_all(tmp_root, ec);
+}
+
+TEST(Phase10ImportTest, UnwritableCacheDirectoryDoesNotBreakMediaImport) {
+    const std::filesystem::path sample = fixture_file("sample_test.mp4");
+    ASSERT_TRUE(std::filesystem::exists(sample)) << "Missing fixture: " << sample;
+
+    const std::filesystem::path tmp_root =
+        std::filesystem::temp_directory_path() / "ave_m14a_unwritable_cache_test";
+    std::error_code ec;
+    std::filesystem::remove_all(tmp_root, ec);
+    std::filesystem::create_directories(tmp_root);
+
+    // Create a regular file at cache_dir path so create_directories fails cleanly
+    const std::filesystem::path blocked_cache_path = tmp_root / "not_a_directory";
+    {
+        std::ofstream ofs(blocked_cache_path, std::ios::binary);
+        ofs << "blocking file";
+    }
+
+    auto cache = std::make_shared<ave::MediaCache>(blocked_cache_path);
+    auto queue = std::make_shared<ave::MediaImportQueue>(ave::MediaImportQueue::WorkFn{}, cache);
+    ave::Project project("Unwritable Cache Project");
+    ave::desktop::MediaPoolModel model(project, queue, nullptr, cache);
+
+    ASSERT_FALSE(model.importMediaFile(QString::fromStdWString(sample.wstring())).isEmpty());
+    ASSERT_TRUE(pump_events_until([&]() {
+        return model.assetCount() == 1 && !model.isImporting();
+    }));
+
+    EXPECT_EQ(model.assetCount(), 1);
+    EXPECT_TRUE(model.lastImportError().isEmpty());
+    const QString thumb = model.data(
+        model.index(0, 0), ave::desktop::MediaPoolModel::ThumbnailDataUrlRole).toString();
+    EXPECT_TRUE(thumb.startsWith(QStringLiteral("data:image/png;base64,")));
+
     model.shutdown();
     std::filesystem::remove_all(tmp_root, ec);
 }

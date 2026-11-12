@@ -4,9 +4,14 @@
 #include "ave/timeline_snapping.hpp"
 #include "ave/timeline_viewport.hpp"
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <QAbstractListModel>
@@ -18,9 +23,11 @@
 #include <QVariantList>
 
 namespace ave {
+class MediaAsset;
 class MediaCache;
 class Project;
 class ProjectSnapshotCoordinator;
+struct WaveformData;
 } // namespace ave
 
 namespace ave::desktop {
@@ -87,6 +94,7 @@ public:
         double timeline_in_sec{0.0};
         double duration_sec{0.0};
         double source_in_sec{0.0};
+        double source_span_sec{0.0};
         int track_row{0};
         bool is_selected{false};
         bool has_waveform{false};
@@ -102,6 +110,9 @@ public:
 
     void set_rows(std::vector<ClipRow> rows);
     void update_selection(const QString& selected_clip_id);
+    void update_waveforms_for_asset(
+        const QString& asset_id,
+        const std::function<QVariantList(double source_in_sec, double source_span_sec)>& builder);
     [[nodiscard]] const std::vector<ClipRow>& rows() const noexcept { return rows_; }
 
 private:
@@ -176,6 +187,9 @@ public:
     }
     void set_media_cache(std::shared_ptr<ave::MediaCache> cache);
 
+    [[nodiscard]] bool is_hydrating_waveforms() const noexcept;
+    [[nodiscard]] uint64_t waveform_hydration_decode_count_for_test() const noexcept;
+
 signals:
     void trackCountChanged();
     void durationSecondsChanged();
@@ -199,7 +213,19 @@ private:
     void rebuild_models();
     [[nodiscard]] QVariantList build_waveform_peaks(const std::string& asset_id,
                                                       double source_in_sec,
-                                                      double source_span_sec) const;
+                                                      double source_span_sec,
+                                                      bool* missing_online_cache_out = nullptr) const;
+    [[nodiscard]] static QVariantList build_waveform_peaks_from_data(const ave::WaveformData* wf,
+                                                                     double source_in_sec,
+                                                                     double source_span_sec);
+    void ensure_hydration_worker_started();
+    void schedule_waveform_hydration(std::vector<ave::MediaAsset> assets);
+    void cancel_waveform_hydration();
+    void shutdown_waveform_hydration();
+    void hydration_worker_loop();
+    void apply_hydrated_waveform(uint64_t generation,
+                                 const QString& asset_id,
+                                 const ave::WaveformData& wf);
     bool replace_active_project(ave::Project next_project);
 
     ave::Project& project_;
@@ -226,6 +252,18 @@ private:
     QString project_name_{};
     QString project_file_path_{};
     QString last_project_error_{};
+
+    std::shared_ptr<std::atomic<bool>> alive_flag_{std::make_shared<std::atomic<bool>>(true)};
+    mutable std::mutex hydration_mutex_{};
+    std::condition_variable hydration_cv_{};
+    bool hydration_started_{false};
+    bool hydration_stop_{false};
+    bool hydration_active_{false};
+    uint64_t hydration_generation_{0};
+    std::vector<ave::MediaAsset> pending_waveform_assets_{};
+    std::shared_ptr<std::atomic<bool>> hydration_cancel_{std::make_shared<std::atomic<bool>>(false)};
+    std::atomic<uint64_t> waveform_decode_count_{0};
+    std::thread hydration_thread_{};
 };
 
 } // namespace ave::desktop

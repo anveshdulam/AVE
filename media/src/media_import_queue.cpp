@@ -8,8 +8,10 @@
 
 namespace ave {
 
-MediaImportQueue::MediaImportQueue(WorkFn work_fn)
-    : work_fn_(work_fn ? std::move(work_fn) : WorkFn(&MediaImportQueue::default_import_work)) {
+MediaImportQueue::MediaImportQueue(WorkFn work_fn, std::shared_ptr<MediaCache> media_cache)
+    : work_fn_(work_fn ? std::move(work_fn) : WorkFn{}),
+      uses_custom_work_fn_(static_cast<bool>(work_fn_)),
+      media_cache_(std::move(media_cache)) {
     std::lock_guard<std::mutex> lock(mutex_);
     active_worker_threads_ = kMaxActiveImports;
     workers_.reserve(kMaxActiveImports);
@@ -21,6 +23,36 @@ MediaImportQueue::MediaImportQueue(WorkFn work_fn)
 MediaImportQueue::~MediaImportQueue() {
     model_alive_->store(false, std::memory_order_release);
     shutdown();
+}
+
+void MediaImportQueue::set_media_cache(std::shared_ptr<MediaCache> media_cache) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    media_cache_ = std::move(media_cache);
+}
+
+std::shared_ptr<MediaCache> MediaImportQueue::media_cache() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return media_cache_;
+}
+
+MediaImportQueue::Diagnostics MediaImportQueue::diagnostics() const noexcept {
+    Diagnostics d;
+    d.probe_decodes = probe_decodes_.load(std::memory_order_relaxed);
+    d.probe_cache_hits = probe_cache_hits_.load(std::memory_order_relaxed);
+    d.thumbnail_decodes = thumbnail_decodes_.load(std::memory_order_relaxed);
+    d.thumbnail_cache_hits = thumbnail_cache_hits_.load(std::memory_order_relaxed);
+    d.waveform_decodes = waveform_decodes_.load(std::memory_order_relaxed);
+    d.waveform_cache_hits = waveform_cache_hits_.load(std::memory_order_relaxed);
+    return d;
+}
+
+void MediaImportQueue::reset_diagnostics() noexcept {
+    probe_decodes_.store(0, std::memory_order_relaxed);
+    probe_cache_hits_.store(0, std::memory_order_relaxed);
+    thumbnail_decodes_.store(0, std::memory_order_relaxed);
+    thumbnail_cache_hits_.store(0, std::memory_order_relaxed);
+    waveform_decodes_.store(0, std::memory_order_relaxed);
+    waveform_cache_hits_.store(0, std::memory_order_relaxed);
 }
 
 void MediaImportQueue::set_callbacks(CompletionCallback on_completed, CountsCallback on_counts_changed) {
@@ -358,9 +390,13 @@ void MediaImportQueue::worker_loop() {
         }
 
         WorkOutput output;
-        if (!job->cancel_state->load(std::memory_order_acquire) && work) {
+        if (!job->cancel_state->load(std::memory_order_acquire)) {
             try {
-                output = work(job->file_path, job->cancel_state);
+                if (uses_custom_work_fn_ && work) {
+                    output = work(job->file_path, job->cancel_state);
+                } else {
+                    output = execute_default_import(job->file_path, job->cancel_state);
+                }
             } catch (const std::exception& ex) {
                 output.terminal_status = ImportJobStatus::Failed;
                 output.error_message = ex.what();
@@ -426,6 +462,125 @@ void MediaImportQueue::worker_loop() {
             finish_counts_cb(finish_counts);
         }
     }
+}
+
+MediaImportQueue::WorkOutput MediaImportQueue::execute_default_import(
+    const std::filesystem::path& file_path,
+    const std::shared_ptr<std::atomic<bool>>& cancel_state) {
+
+    std::shared_ptr<MediaCache> cache;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        cache = media_cache_;
+    }
+
+    WorkOutput out;
+    if (cancel_state && cancel_state->load(std::memory_order_acquire)) {
+        out.terminal_status = ImportJobStatus::Cancelled;
+        out.error_message = "Import cancelled";
+        return out;
+    }
+
+    if (cache) {
+        if (auto cached_asset = cache->get_probe(file_path); cached_asset.has_value()) {
+            probe_cache_hits_.fetch_add(1, std::memory_order_relaxed);
+            out.asset = std::move(cached_asset);
+        }
+    }
+
+    if (!out.asset.has_value()) {
+        probe_decodes_.fetch_add(1, std::memory_order_relaxed);
+        ProbeResult probe = FFmpegProbe::probe(file_path, cancel_state);
+        if (probe.cancelled || (cancel_state && cancel_state->load(std::memory_order_acquire))) {
+            out.terminal_status = ImportJobStatus::Cancelled;
+            out.error_message = "Import cancelled during media probe";
+            return out;
+        }
+        if (!probe.success || !probe.asset.has_value()) {
+            out.terminal_status = ImportJobStatus::Failed;
+            out.error_message = probe.error_message.empty() ? "Media probe failed" : std::move(probe.error_message);
+            return out;
+        }
+        out.asset = std::move(probe.asset);
+        if (cache) {
+            cache->store_probe(file_path, *out.asset, cancel_state);
+        }
+    }
+
+    if (out.asset->primary_video_stream() != nullptr) {
+        std::optional<ThumbnailData> thumb;
+        if (cache) {
+            bool cache_hit = false;
+            thumb = cache->get_or_extract_thumbnail(
+                *out.asset,
+                Rational{0, 1},
+                160,
+                90,
+                [this, &file_path](const std::shared_ptr<std::atomic<bool>>& cs) {
+                    thumbnail_decodes_.fetch_add(1, std::memory_order_relaxed);
+                    return ThumbnailExtractor::extract(file_path, Rational{0, 1}, 160, 90, cs);
+                },
+                cancel_state,
+                &cache_hit);
+            if (cache_hit) {
+                thumbnail_cache_hits_.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else {
+            thumbnail_decodes_.fetch_add(1, std::memory_order_relaxed);
+            thumb = ThumbnailExtractor::extract(file_path, Rational{0, 1}, 160, 90, cancel_state);
+        }
+
+        if (cancel_state && cancel_state->load(std::memory_order_acquire)) {
+            out.terminal_status = ImportJobStatus::Cancelled;
+            out.error_message = "Import cancelled during thumbnail extraction";
+            out.asset.reset();
+            return out;
+        }
+        out.thumbnail = std::move(thumb);
+    }
+
+    if (out.asset->primary_audio_stream() != nullptr) {
+        std::optional<WaveformData> wave;
+        if (cache) {
+            bool cache_hit = false;
+            wave = cache->get_or_extract_waveform(
+                *out.asset,
+                100,
+                [this, &file_path](const std::shared_ptr<std::atomic<bool>>& cs) {
+                    waveform_decodes_.fetch_add(1, std::memory_order_relaxed);
+                    return WaveformExtractor::extract(file_path, 100, cs);
+                },
+                cancel_state,
+                &cache_hit);
+            if (cache_hit) {
+                waveform_cache_hits_.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else {
+            waveform_decodes_.fetch_add(1, std::memory_order_relaxed);
+            wave = WaveformExtractor::extract(file_path, 100, cancel_state);
+        }
+
+        if (cancel_state && cancel_state->load(std::memory_order_acquire)) {
+            out.terminal_status = ImportJobStatus::Cancelled;
+            out.error_message = "Import cancelled during waveform extraction";
+            out.asset.reset();
+            out.thumbnail.reset();
+            return out;
+        }
+        out.waveform = std::move(wave);
+    }
+
+    if (cancel_state && cancel_state->load(std::memory_order_acquire)) {
+        out.terminal_status = ImportJobStatus::Cancelled;
+        out.error_message = "Import cancelled";
+        out.asset.reset();
+        out.thumbnail.reset();
+        out.waveform.reset();
+        return out;
+    }
+
+    out.terminal_status = ImportJobStatus::Succeeded;
+    return out;
 }
 
 MediaImportQueue::WorkOutput MediaImportQueue::default_import_work(

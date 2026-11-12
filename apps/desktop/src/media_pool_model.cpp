@@ -2,6 +2,7 @@
 
 #include "ave/media_asset.hpp"
 #include "ave/media_cache.hpp"
+#include "ave/media_extractor.hpp"
 #include "ave/media_import_queue.hpp"
 #include "ave/media_pool.hpp"
 #include "ave/project.hpp"
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <utility>
 
 #include <QBuffer>
 #include <QByteArray>
@@ -117,6 +119,14 @@ MediaPoolModel::MediaPoolModel(ave::Project& project,
         active_import_count_ = static_cast<int>(initial_counts.active_count);
         pending_import_count_ = static_cast<int>(initial_counts.pending_count);
         last_counts_seq_ = initial_counts.seq;
+    }
+
+    if (import_queue_ && media_cache_ && !import_queue_->media_cache()) {
+        import_queue_->set_media_cache(media_cache_);
+    }
+
+    if (media_cache_) {
+        hydration_thread_ = std::thread([this]() { hydration_worker_loop(); });
     }
 
     reloadFromProject();
@@ -264,6 +274,8 @@ void MediaPoolModel::cancelAllImports() {
 }
 
 void MediaPoolModel::reloadFromProject() {
+    cancel_hydration();
+
     const int old_count = assetCount();
     const auto& asset_map = project_.media_pool().assets();
 
@@ -281,20 +293,42 @@ void MediaPoolModel::reloadFromProject() {
             return a->id() < b->id();
         });
 
+    std::vector<ave::MediaAsset> to_hydrate;
+
     beginResetModel();
     rows_.clear();
     rows_.reserve(sorted_assets.size());
     for (const ave::MediaAsset* asset : sorted_assets) {
         std::optional<ave::ThumbnailData> cached_thumb;
         if (media_cache_) {
-            cached_thumb = media_cache_->get_thumbnail(asset->id(), ave::Rational{0, 1}, 160, 90);
+            cached_thumb = media_cache_->get_thumbnail_memory_only(
+                *asset, ave::Rational{0, 1}, 160, 90);
+            if (!cached_thumb.has_value()) {
+                std::error_code ec;
+                const bool file_exists = !asset->file_path().empty() &&
+                                         std::filesystem::exists(asset->file_path(), ec) && !ec;
+                if (!file_exists) {
+                    cached_thumb = media_cache_->get_thumbnail(
+                        asset->id(), ave::Rational{0, 1}, 160, 90);
+                }
+            }
         }
-        rows_.push_back(build_row(*asset, cached_thumb ? &*cached_thumb : nullptr));
+
+        AssetRow row = build_row(*asset, cached_thumb ? &*cached_thumb : nullptr);
+        if (media_cache_ && !cached_thumb.has_value() && row.is_online &&
+            asset->primary_video_stream() != nullptr) {
+            to_hydrate.push_back(*asset);
+        }
+        rows_.push_back(std::move(row));
     }
     endResetModel();
 
     if (assetCount() != old_count) {
         emit assetCountChanged();
+    }
+
+    if (!to_hydrate.empty() && media_cache_ && !shutting_down_.load(std::memory_order_acquire)) {
+        schedule_thumbnail_hydration(std::move(to_hydrate));
     }
 }
 
@@ -304,12 +338,161 @@ void MediaPoolModel::shutdown() {
         return;
     }
 
+    {
+        std::lock_guard<std::mutex> lock(hydration_mutex_);
+        hydration_stop_ = true;
+        pending_hydration_assets_.clear();
+        ++hydration_generation_;
+        if (hydration_cancel_) {
+            hydration_cancel_->store(true, std::memory_order_release);
+        }
+    }
+    hydration_cv_.notify_all();
+    if (hydration_thread_.joinable()) {
+        hydration_thread_.join();
+    }
+
     if (import_queue_) {
         import_queue_->clear_callbacks();
         import_queue_->shutdown();
     }
 
     apply_import_counts(ave::ImportQueueCounts{0, 0, last_counts_seq_ + 1}, !in_destructor_);
+}
+
+bool MediaPoolModel::is_hydrating() const noexcept {
+    std::lock_guard<std::mutex> lock(hydration_mutex_);
+    return hydration_active_ || !pending_hydration_assets_.empty();
+}
+
+uint64_t MediaPoolModel::hydration_decode_count_for_test() const noexcept {
+    return hydration_decode_count_.load(std::memory_order_relaxed);
+}
+
+void MediaPoolModel::cancel_hydration() {
+    std::lock_guard<std::mutex> lock(hydration_mutex_);
+    ++hydration_generation_;
+    pending_hydration_assets_.clear();
+    if (hydration_cancel_) {
+        hydration_cancel_->store(true, std::memory_order_release);
+    }
+    hydration_cancel_ = std::make_shared<std::atomic<bool>>(false);
+}
+
+void MediaPoolModel::schedule_thumbnail_hydration(std::vector<ave::MediaAsset> assets) {
+    if (assets.empty() || !media_cache_ || shutting_down_.load(std::memory_order_acquire)) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(hydration_mutex_);
+        if (hydration_stop_) {
+            return;
+        }
+        ++hydration_generation_;
+        pending_hydration_assets_ = std::move(assets);
+        if (hydration_cancel_) {
+            hydration_cancel_->store(true, std::memory_order_release);
+        }
+        hydration_cancel_ = std::make_shared<std::atomic<bool>>(false);
+    }
+    hydration_cv_.notify_one();
+}
+
+void MediaPoolModel::hydration_worker_loop() {
+    for (;;) {
+        std::vector<ave::MediaAsset> batch;
+        uint64_t gen = 0;
+        std::shared_ptr<std::atomic<bool>> cancel;
+
+        {
+            std::unique_lock<std::mutex> lock(hydration_mutex_);
+            hydration_active_ = false;
+            hydration_cv_.wait(lock, [this]() {
+                return hydration_stop_ || !pending_hydration_assets_.empty();
+            });
+            if (hydration_stop_) {
+                return;
+            }
+            batch = std::move(pending_hydration_assets_);
+            pending_hydration_assets_.clear();
+            gen = hydration_generation_;
+            cancel = hydration_cancel_;
+            hydration_active_ = true;
+        }
+
+        const std::shared_ptr<ave::MediaCache> cache = media_cache_;
+        const std::shared_ptr<std::atomic<bool>> alive = model_alive_;
+        QPointer<MediaPoolModel> self(this);
+
+        for (const ave::MediaAsset& asset : batch) {
+            if (shutting_down_.load(std::memory_order_acquire) ||
+                !alive || !alive->load(std::memory_order_acquire) ||
+                (cancel && cancel->load(std::memory_order_acquire))) {
+                break;
+            }
+            if (!cache) {
+                break;
+            }
+
+            std::optional<ave::ThumbnailData> thumb = cache->get_or_extract_thumbnail(
+                asset,
+                ave::Rational{0, 1},
+                160,
+                90,
+                [this, &asset](const std::shared_ptr<std::atomic<bool>>& cs) {
+                    hydration_decode_count_.fetch_add(1, std::memory_order_relaxed);
+                    return ave::ThumbnailExtractor::extract(
+                        asset.file_path(), ave::Rational{0, 1}, 160, 90, cs);
+                },
+                cancel);
+
+            if (!thumb.has_value() || !thumb->is_valid() ||
+                (cancel && cancel->load(std::memory_order_acquire)) ||
+                shutting_down_.load(std::memory_order_acquire)) {
+                continue;
+            }
+
+            const QString data_url = encode_thumbnail_data_url(&*thumb);
+            if (data_url.isEmpty()) {
+                continue;
+            }
+            const QString asset_id_q = QString::fromStdString(asset.id());
+            QMetaObject::invokeMethod(
+                this,
+                [self, alive, gen, asset_id_q, data_url]() {
+                    if (!alive || !alive->load(std::memory_order_acquire) || self.isNull()) {
+                        return;
+                    }
+                    self->apply_hydrated_thumbnail(gen, asset_id_q, data_url);
+                },
+                Qt::QueuedConnection);
+        }
+    }
+}
+
+void MediaPoolModel::apply_hydrated_thumbnail(uint64_t generation,
+                                              const QString& asset_id,
+                                              const QString& data_url) {
+    if (shutting_down_.load(std::memory_order_acquire)) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(hydration_mutex_);
+        if (generation != hydration_generation_) {
+            return;
+        }
+    }
+    for (std::size_t i = 0; i < rows_.size(); ++i) {
+        if (rows_[i].asset_id == asset_id) {
+            if (rows_[i].thumbnail_data_url == data_url) {
+                return;
+            }
+            rows_[i].thumbnail_data_url = data_url;
+            const QModelIndex idx = index(static_cast<int>(i), 0);
+            emit dataChanged(idx, idx, {ThumbnailDataUrlRole});
+            return;
+        }
+    }
 }
 
 MediaPoolModel::AssetRow MediaPoolModel::build_row(const ave::MediaAsset& asset,
@@ -434,13 +617,17 @@ void MediaPoolModel::handle_import_completed(ave::ImportJobResult result) {
         const ave::MediaAsset& stored = project_.media_pool_mut().register_asset(*result.asset);
 
         if (media_cache_) {
-            if (result.thumbnail && result.thumbnail->is_valid()) {
-                media_cache_->store_thumbnail(stored.id(), ave::Rational{0, 1},
+            if (result.thumbnail && result.thumbnail->is_valid() &&
+                !media_cache_->get_thumbnail_memory_only(
+                    stored, ave::Rational{0, 1}, result.thumbnail->width, result.thumbnail->height).has_value()) {
+                media_cache_->store_thumbnail(stored, ave::Rational{0, 1},
                                               result.thumbnail->width, result.thumbnail->height,
                                               *result.thumbnail);
             }
-            if (result.waveform && result.waveform->is_valid()) {
-                media_cache_->store_waveform(stored.id(), *result.waveform);
+            if (result.waveform && result.waveform->is_valid() &&
+                !media_cache_->get_waveform_memory_only(
+                    stored, result.waveform->peaks_per_second > 0 ? result.waveform->peaks_per_second : 100).has_value()) {
+                media_cache_->store_waveform(stored, *result.waveform);
             }
         }
 
