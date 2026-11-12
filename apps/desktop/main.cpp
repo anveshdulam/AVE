@@ -55,7 +55,8 @@ void print_usage() {
 
 void print_system_status(const ave::VulkanDevice* vulkan_dev,
                          const ave::Project& project,
-                         const ave::PlaybackViewModel& playback_vm) {
+                         const ave::PlaybackViewModel& playback_vm,
+                         const ave::AudioDeviceDiagnostics* audio_diag = nullptr) {
     std::cout << "======================================================================\n";
     std::cout << "        AUTONOMOUS VIDEO EDITOR (AVE) - NATIVE DESKTOP SHELL          \n";
     std::cout << "        Version 0.1.0 (Windows-First, Local-First, C++20 Core)        \n";
@@ -77,6 +78,19 @@ void print_system_status(const ave::VulkanDevice* vulkan_dev,
         std::cout << "  Compute Pipeline: Initialized & Verified (16x16 Workgroups)\n\n";
     } else {
         std::cout << "  GPU Accelerator: CPU Reference Fallback (Headless / VM Mode)\n\n";
+    }
+
+    if (audio_diag) {
+        std::cout << "[Audio Output]\n";
+        std::cout << "  Backend:          " << (audio_diag->backend_name.empty() ? "None" : audio_diag->backend_name) << "\n";
+        std::cout << "  Device:           " << (audio_diag->device_name.empty() ? "None" : audio_diag->device_name) << "\n";
+        std::cout << "  Available:        " << (audio_diag->available ? "Yes" : "No")
+                  << " (" << ave::to_string(audio_diag->state) << ")\n";
+        std::cout << "  Status:           " << audio_diag->format_summary() << "\n";
+        if (!audio_diag->last_error.empty()) {
+            std::cout << "  Error:            " << audio_diag->last_error << "\n";
+        }
+        std::cout << "\n";
     }
 
     std::cout << "[Editorial Timeline & Transport Engine]\n";
@@ -113,14 +127,17 @@ int run_status_command() {
     std::shared_ptr<ave::VulkanDevice> vulkan_dev = ave::VulkanDevice::create(false);
     auto snapshot_store = std::make_shared<ave::PlaybackSnapshotStore>(
         proj.timeline(), proj.media_pool());
-    ave::PlaybackSession session(snapshot_store);
+    ave::PlaybackSessionConfig cfg;
+    cfg.audio_backend_mode = ave::AudioBackendMode::AutoPlatformDefault;
+    ave::PlaybackSession session(snapshot_store, cfg);
     if (vulkan_dev) {
         session.set_vulkan_device(vulkan_dev);
     }
     ave::ProjectSnapshotCoordinator coordinator(proj, snapshot_store, &session);
     ave::PlaybackViewModel playback_vm(session, proj.timeline().frame_rate());
 
-    print_system_status(vulkan_dev.get(), proj, playback_vm);
+    const ave::AudioDeviceDiagnostics audio_diag = session.audio_diagnostics();
+    print_system_status(vulkan_dev.get(), proj, playback_vm, &audio_diag);
 
     session.shutdown();
     return 0;
@@ -138,6 +155,7 @@ int run_smoke_test() {
     ave::PlaybackSessionConfig cfg;
     cfg.max_preview_width = ave::kDefaultPreviewWidth;
     cfg.max_preview_height = ave::kDefaultPreviewHeight;
+    cfg.audio_backend_mode = ave::AudioBackendMode::NullForTesting;
     ave::PlaybackSession session(snapshot_store, cfg, frame_hub);
     if (vulkan_dev) {
         session.set_vulkan_device(vulkan_dev);
@@ -151,6 +169,7 @@ int run_smoke_test() {
     (void)inspector_vm;
 
     std::cout << "[Smoke Test] Hardware Accelerator: " << playback_vm.hardware_device_name() << "\n";
+    std::cout << "[Smoke Test] Audio Output: " << session.audio_output_status() << "\n";
     std::cout << "[Smoke Test] Compositing Pipeline: "
               << (playback_vm.is_compositing_enabled() ? "Active" : "Disabled") << "\n";
     std::cout << "[Smoke Test] Playhead Timecode: " << playback_vm.current_timecode() << "\n";
@@ -220,6 +239,9 @@ public:
         ave::PlaybackSessionConfig cfg;
         cfg.max_preview_width = ave::kDefaultPreviewWidth;
         cfg.max_preview_height = ave::kDefaultPreviewHeight;
+        cfg.audio_backend_mode = verify_qml_only
+                                     ? ave::AudioBackendMode::NullForTesting
+                                     : ave::AudioBackendMode::AutoPlatformDefault;
         session_ = std::make_unique<ave::PlaybackSession>(snapshot_store_, cfg, frame_hub_);
         if (vulkan_device_) {
             session_->set_vulkan_device(vulkan_device_);
@@ -375,6 +397,9 @@ public:
     [[nodiscard]] const ave::Project& project() const { return *project_; }
     [[nodiscard]] const ave::VulkanDevice* vulkan_device() const noexcept { return vulkan_device_.get(); }
     [[nodiscard]] const ave::PlaybackViewModel& playback_vm() const { return *playback_vm_; }
+    [[nodiscard]] ave::AudioDeviceDiagnostics audio_diagnostics() const {
+        return session_ ? session_->audio_diagnostics() : ave::AudioDeviceDiagnostics{};
+    }
     [[nodiscard]] QQmlApplicationEngine& engine() { return *engine_; }
 
 private:
@@ -443,7 +468,8 @@ int main(int argc, char* argv[]) {
         runtime.initialize(verify_qml_only);
 
         if (!verify_qml_only) {
-            print_system_status(runtime.vulkan_device(), runtime.project(), runtime.playback_vm());
+            const ave::AudioDeviceDiagnostics audio_diag = runtime.audio_diagnostics();
+            print_system_status(runtime.vulkan_device(), runtime.project(), runtime.playback_vm(), &audio_diag);
         }
 
         bool qml_creation_failed = false;

@@ -16,6 +16,7 @@
 #include "ave/project.hpp"
 #include "ave/timeline.hpp"
 #include "ave/timeline_model.hpp"
+#include "ave/wasapi_audio_device.hpp"
 
 #include <gtest/gtest.h>
 
@@ -180,18 +181,27 @@ int find_clip_row_by_id(const QAbstractListModel* clips_model, const QString& cl
 
 TEST(Phase10ServicesPropertyTest, MetaObjectPropertiesSignalsAndEnums) {
     const PropExpectation playback_props[] = {
-        { "isPlaying",          false, false },
-        { "playheadPosition",   false, false },
-        { "durationSeconds",    false, false },
-        { "timecode",           false, false },
-        { "fps",                false, false },
-        { "currentFrameSeq",    false, false },
-        { "compositingEnabled", true,  false },
-        { "hasGpuAcceleration", false, true  },
-        { "gpuDeviceName",      false, true  },
-        { "audioOutputStatus",  false, true  },
-        { "leftLevelDb",        false, false },
-        { "rightLevelDb",       false, false }
+        { "isPlaying",            false, false },
+        { "playheadPosition",     false, false },
+        { "durationSeconds",      false, false },
+        { "timecode",             false, false },
+        { "fps",                  false, false },
+        { "currentFrameSeq",      false, false },
+        { "compositingEnabled",   true,  false },
+        { "hasGpuAcceleration",   false, true  },
+        { "gpuDeviceName",        false, true  },
+        { "audioOutputStatus",    false, false },
+        { "audioOutputAvailable", false, false },
+        { "audioBackendName",     false, false },
+        { "audioDeviceName",      false, false },
+        { "audioSampleRate",      false, false },
+        { "audioChannels",        false, false },
+        { "audioSampleFormat",    false, false },
+        { "audioDeviceState",     false, false },
+        { "audioUnderrunCount",   false, false },
+        { "audioLastError",       false, false },
+        { "leftLevelDb",          false, false },
+        { "rightLevelDb",         false, false }
     };
     verify_meta_properties(ave::desktop::PlaybackService::staticMetaObject, playback_props, "PlaybackService");
 
@@ -268,11 +278,15 @@ TEST(Phase10ServicesPropertyTest, MetaObjectPropertiesSignalsAndEnums) {
 
     auto store = std::make_shared<ave::PlaybackSnapshotStore>(project.timeline(), project.media_pool());
     auto hub = std::make_shared<ave::FramePresentationHub>();
-    ave::PlaybackSession session(store, ave::PlaybackSessionConfig{}, hub);
+    ave::PlaybackSessionConfig null_cfg;
+    null_cfg.audio_backend_mode = ave::AudioBackendMode::NullForTesting;
+    ave::PlaybackSession session(store, null_cfg, hub);
     ave::desktop::PlaybackService playback(session, hub, store);
     EXPECT_FALSE(playback.gpuDeviceName().isEmpty());
     EXPECT_EQ(playback.audioOutputStatus(),
-              QStringLiteral("NullAudioDevice (Simulated; Physical WASAPI Deferred)"));
+              QStringLiteral("NullAudioDevice (Simulated / Headless; 48000 Hz, 2ch, float32, Stopped)"));
+    EXPECT_FALSE(playback.audioOutputAvailable());
+    EXPECT_EQ(playback.audioBackendName(), QStringLiteral("NullAudioDevice"));
     playback.seekSeconds(1.25);
     EXPECT_NEAR(playback.playheadPosition(), 1.25, 1e-6);
     playback.seekSeconds(-9.0);
@@ -733,7 +747,9 @@ TEST(Phase10ServicesPropertyTest, PlaybackSnapshotRepublishAndConcurrentReaderSa
 
     auto store = std::make_shared<ave::PlaybackSnapshotStore>(project.timeline(), project.media_pool());
     auto hub = std::make_shared<ave::FramePresentationHub>();
-    ave::PlaybackSession session(store, ave::PlaybackSessionConfig{}, hub);
+    ave::PlaybackSessionConfig null_cfg;
+    null_cfg.audio_backend_mode = ave::AudioBackendMode::NullForTesting;
+    ave::PlaybackSession session(store, null_cfg, hub);
     ave::ProjectSnapshotCoordinator coordinator(project, store, &session);
 
     auto import_queue = std::make_shared<ave::MediaImportQueue>();
@@ -833,7 +849,9 @@ TEST(Phase10ServicesPropertyTest, M13AUnifiedDirtyTrackingDesktopIntegration) {
     ave::Project project("Desktop Dirty Integration");
     auto store = std::make_shared<ave::PlaybackSnapshotStore>(project.timeline(), project.media_pool());
     auto hub = std::make_shared<ave::FramePresentationHub>();
-    ave::PlaybackSession session(store, ave::PlaybackSessionConfig{}, hub);
+    ave::PlaybackSessionConfig null_cfg;
+    null_cfg.audio_backend_mode = ave::AudioBackendMode::NullForTesting;
+    ave::PlaybackSession session(store, null_cfg, hub);
     ave::ProjectSnapshotCoordinator coordinator(project, store, &session);
 
     auto cache = std::make_shared<ave::MediaCache>(tmp.path / "cache");
@@ -1150,6 +1168,7 @@ TEST(Phase10ServicesPropertyTest, M13BProjectLifecycleDialogAndCloseFlows) {
     ave::PlaybackSessionConfig cfg;
     cfg.max_preview_width = 320;
     cfg.max_preview_height = 180;
+    cfg.audio_backend_mode = ave::AudioBackendMode::NullForTesting;
     auto session = std::make_unique<ave::PlaybackSession>(snapshot_store, cfg, frame_hub);
     auto coordinator = std::make_unique<ave::ProjectSnapshotCoordinator>(
         *project, snapshot_store, session.get());
@@ -1622,8 +1641,10 @@ TEST(Phase10ServicesPropertyTest, M13C2StartupRecoveryOpenDiscardAndLifecycleQML
         auto frame_hub = std::make_shared<ave::FramePresentationHub>();
         auto media_cache = std::make_shared<ave::MediaCache>(tmp.path / "cache_a");
         auto import_queue = std::make_shared<ave::MediaImportQueue>();
+        ave::PlaybackSessionConfig null_cfg;
+        null_cfg.audio_backend_mode = ave::AudioBackendMode::NullForTesting;
         auto session = std::make_unique<ave::PlaybackSession>(
-            snapshot_store, ave::PlaybackSessionConfig{}, frame_hub);
+            snapshot_store, null_cfg, frame_hub);
         auto coordinator = std::make_unique<ave::ProjectSnapshotCoordinator>(
             *project, snapshot_store, session.get());
         auto media_pool_model = std::make_unique<ave::desktop::MediaPoolModel>(
@@ -1745,8 +1766,10 @@ TEST(Phase10ServicesPropertyTest, M13C2StartupRecoveryOpenDiscardAndLifecycleQML
         auto frame_hub = std::make_shared<ave::FramePresentationHub>();
         auto media_cache = std::make_shared<ave::MediaCache>(tmp.path / "cache_b");
         auto import_queue = std::make_shared<ave::MediaImportQueue>();
+        ave::PlaybackSessionConfig null_cfg;
+        null_cfg.audio_backend_mode = ave::AudioBackendMode::NullForTesting;
         auto session = std::make_unique<ave::PlaybackSession>(
-            snapshot_store, ave::PlaybackSessionConfig{}, frame_hub);
+            snapshot_store, null_cfg, frame_hub);
         auto coordinator = std::make_unique<ave::ProjectSnapshotCoordinator>(
             *project, snapshot_store, session.get());
         auto media_pool_model = std::make_unique<ave::desktop::MediaPoolModel>(
@@ -2038,6 +2061,130 @@ TEST(Phase10ServicesPropertyTest, M13C2StartupRecoveryOpenDiscardAndLifecycleQML
         frame_hub->shutdown();
         coordinator->unbind();
     }
+}
+
+TEST(Phase10ServicesPropertyTest, M21AWasapiDiagnosticsComIsolationAndReverseShutdown) {
+    struct ServiceMockEndpoint final : ave::IWasapiEndpoint {
+        bool fail_open{false};
+        std::thread::id worker_tid{};
+        std::vector<float> scratch{};
+        ave::WasapiStatus open_default_render_device(std::string& out_name) override {
+            worker_tid = std::this_thread::get_id();
+            if (fail_open) {
+                ave::WasapiStatus st;
+                st.ok = false;
+                st.error_message = "No WASAPI endpoint connected";
+                return st;
+            }
+            out_name = "Studio DAC (Mock WASAPI)";
+            return {};
+        }
+        ave::WasapiStatus get_mix_format(ave::WasapiEndpointFormat& out_fmt) override {
+            out_fmt = {48000, 2, ave::AudioSampleFormat::Float32, 32, false, 0};
+            return {};
+        }
+        bool is_format_supported_shared(const ave::WasapiEndpointFormat&,
+                                        ave::WasapiEndpointFormat&,
+                                        bool& has_closest) override {
+            has_closest = false;
+            return true;
+        }
+        ave::WasapiStatus initialize_client(const ave::WasapiEndpointFormat&,
+                                               size_t,
+                                               bool,
+                                               size_t& out_frames,
+                                               bool& out_event) override {
+            out_frames = 128;
+            out_event = false;
+            scratch.assign(128 * 2, 0.0f);
+            return {};
+        }
+        void* native_wait_handle() const noexcept override { return nullptr; }
+        ave::WasapiStatus get_current_padding(size_t& out_pad) override {
+            out_pad = 0;
+            return {};
+        }
+        ave::WasapiStatus start() override { return {}; }
+        ave::WasapiStatus stop() override { return {}; }
+        ave::WasapiStatus reset() override { return {}; }
+        ave::WasapiStatus get_buffer(size_t frames, uint8_t** out_data) override {
+            if (scratch.size() < frames * 2) {
+                scratch.resize(frames * 2, 0.0f);
+            }
+            *out_data = reinterpret_cast<uint8_t*>(scratch.data());
+            return {};
+        }
+        ave::WasapiStatus release_buffer(size_t, bool) override { return {}; }
+        void close() override {}
+    };
+
+    const std::thread::id gui_thread_id = std::this_thread::get_id();
+    std::thread::id seen_worker_tid{};
+
+    ave::Project project("M21A Service Binding");
+    auto store = std::make_shared<ave::PlaybackSnapshotStore>(project.timeline(), project.media_pool());
+    auto hub = std::make_shared<ave::FramePresentationHub>();
+    ave::PlaybackSessionConfig cfg;
+    cfg.audio_backend_mode = ave::AudioBackendMode::NullForTesting;
+    auto session = std::make_unique<ave::PlaybackSession>(store, cfg, hub);
+
+    auto wasapi_ok = std::make_unique<ave::WasapiAudioDevice>([&seen_worker_tid]() {
+        auto ep = std::make_unique<ServiceMockEndpoint>();
+        seen_worker_tid = std::this_thread::get_id();
+        return ep;
+    });
+    session->set_audio_device(std::move(wasapi_ok));
+
+    // Scenario 16: WASAPI COM worker runs on dedicated MTA thread, never GUI thread
+    EXPECT_NE(seen_worker_tid, std::thread::id{});
+    EXPECT_NE(seen_worker_tid, gui_thread_id);
+
+    auto service = std::make_unique<ave::desktop::PlaybackService>(*session, hub, store);
+    EXPECT_TRUE(service->audioOutputAvailable());
+    EXPECT_EQ(service->audioBackendName(), QStringLiteral("WASAPI"));
+    EXPECT_EQ(service->audioDeviceName(), QStringLiteral("Studio DAC (Mock WASAPI)"));
+    EXPECT_EQ(service->audioSampleRate(), 48000);
+    EXPECT_EQ(service->audioChannels(), 2);
+    EXPECT_EQ(service->audioSampleFormat(), QStringLiteral("float32"));
+    EXPECT_EQ(service->audioDeviceState(), QStringLiteral("Stopped"));
+    EXPECT_TRUE(service->audioLastError().isEmpty());
+
+    QSignalSpy diag_spy(service.get(), &ave::desktop::PlaybackService::audioDiagnosticsChanged);
+    service->play();
+    pump_events_until([&service]() {
+        return service->audioDeviceState() == QStringLiteral("Running");
+    }, 1500);
+    EXPECT_EQ(service->audioDeviceState(), QStringLiteral("Running"));
+    EXPECT_GE(diag_spy.count(), 1);
+
+    // Pause -> refresh diagnostics reflects Paused cleanly
+    service->pause();
+    pump_events_until([&service]() {
+        return service->audioDeviceState() == QStringLiteral("Paused");
+    }, 1500);
+    EXPECT_EQ(service->audioDeviceState(), QStringLiteral("Paused"));
+
+    // Inject failed WASAPI endpoint -> PlaybackService exposes explicit unavailable + error, never NullAudioDevice
+    auto wasapi_fail = std::make_unique<ave::WasapiAudioDevice>([]() {
+        auto ep = std::make_unique<ServiceMockEndpoint>();
+        ep->fail_open = true;
+        return ep;
+    });
+    session->set_audio_device(std::move(wasapi_fail));
+    service->refreshAudioDiagnostics();
+    EXPECT_FALSE(service->audioOutputAvailable());
+    EXPECT_EQ(service->audioBackendName(), QStringLiteral("WASAPI"));
+    EXPECT_EQ(service->audioDeviceState(), QStringLiteral("Error"));
+    EXPECT_FALSE(service->audioLastError().isEmpty());
+    EXPECT_TRUE(service->audioOutputStatus().contains(QStringLiteral("WASAPI Unavailable")));
+
+    // Scenario 15: Clean reverse shutdown order (service -> session -> hub) with no QML/UI crash
+    service->shutdown();
+    session->shutdown();
+    hub->shutdown();
+    service.reset();
+    session.reset();
+    hub.reset();
 }
 
 int main(int argc, char** argv) {

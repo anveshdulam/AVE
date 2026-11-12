@@ -800,7 +800,9 @@ TEST(Phase10ImportTest, CompletedImportRepublishesSnapshotForPlaybackSession) {
         project.timeline(), project.media_pool());
     ASSERT_EQ(snapshot_store->current_version(), 1u);
 
-    ave::PlaybackSession session(snapshot_store);
+    ave::PlaybackSessionConfig cfg;
+    cfg.audio_backend_mode = ave::AudioBackendMode::NullForTesting;
+    ave::PlaybackSession session(snapshot_store, cfg);
     ave::ProjectSnapshotCoordinator coordinator(project, snapshot_store, &session);
 
     auto cache = std::make_shared<ave::MediaCache>(

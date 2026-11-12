@@ -5,12 +5,16 @@
 #include "ave/project.hpp"
 #include "ave/timecode.hpp"
 #include "ave/timeline.hpp"
+#include "ave/wasapi_audio_device.hpp"
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -121,6 +125,7 @@ int main(int argc, char* argv[]) {
     cfg.video_queue_capacity = 8;
     cfg.audio_sample_rate = 48000;
     cfg.audio_channels = 2;
+    cfg.audio_backend_mode = ave::AudioBackendMode::NullForTesting;
 
     auto snapshot_store = std::make_shared<ave::PlaybackSnapshotStore>(
         project.timeline(), project.media_pool());
@@ -369,6 +374,167 @@ int main(int argc, char* argv[]) {
     std::error_code rm_ec;
     ASSERT_TRUE(std::filesystem::remove(relink_path, rm_ec));
     relink_guard.path.clear();
+
+    // 14. PlaybackSession + Mock WASAPI Lifecycle, Seek Flush & Non-Silent Failure
+    {
+        struct SessionMockEndpoint final : ave::IWasapiEndpoint {
+            struct State {
+                std::mutex mtx;
+                bool fail_open{false};
+                std::atomic<int> starts{0};
+                std::atomic<int> stops{0};
+                std::atomic<int> resets{0};
+                std::atomic<size_t> reset_sample_offset{0};
+                std::vector<float> samples;
+            };
+            explicit SessionMockEndpoint(std::shared_ptr<State> s) : st(std::move(s)) {}
+            std::shared_ptr<State> st;
+            std::vector<float> scratch;
+
+            ave::WasapiStatus open_default_render_device(std::string& out_name) override {
+                if (st->fail_open) {
+                    ave::WasapiStatus err;
+                    err.ok = false;
+                    err.error_message = "Simulated speaker disconnected";
+                    return err;
+                }
+                out_name = "Mock PlaybackSession Speakers";
+                return {};
+            }
+            ave::WasapiStatus get_mix_format(ave::WasapiEndpointFormat& out_fmt) override {
+                out_fmt = {48000, 2, ave::AudioSampleFormat::Float32, 32, false, 0};
+                return {};
+            }
+            bool is_format_supported_shared(const ave::WasapiEndpointFormat&,
+                                            ave::WasapiEndpointFormat&,
+                                            bool& has_closest) override {
+                has_closest = false;
+                return true;
+            }
+            ave::WasapiStatus initialize_client(const ave::WasapiEndpointFormat&,
+                                                   size_t,
+                                                   bool,
+                                                   size_t& out_frames,
+                                                   bool& out_event) override {
+                out_frames = 128;
+                out_event = false; // Timer-driven in mock
+                scratch.assign(128 * 2, 0.0f);
+                return {};
+            }
+            void* native_wait_handle() const noexcept override { return nullptr; }
+            ave::WasapiStatus get_current_padding(size_t& out_pad) override {
+                out_pad = 0;
+                return {};
+            }
+            ave::WasapiStatus start() override {
+                st->starts.fetch_add(1, std::memory_order_relaxed);
+                return {};
+            }
+            ave::WasapiStatus stop() override {
+                st->stops.fetch_add(1, std::memory_order_relaxed);
+                return {};
+            }
+            ave::WasapiStatus reset() override {
+                std::lock_guard<std::mutex> lock(st->mtx);
+                st->resets.fetch_add(1, std::memory_order_relaxed);
+                st->reset_sample_offset.store(st->samples.size(), std::memory_order_release);
+                return {};
+            }
+            ave::WasapiStatus get_buffer(size_t frames, uint8_t** out_ptr) override {
+                if (scratch.size() < frames * 2) {
+                    scratch.resize(frames * 2, 0.0f);
+                }
+                *out_ptr = reinterpret_cast<uint8_t*>(scratch.data());
+                return {};
+            }
+            ave::WasapiStatus release_buffer(size_t frames, bool silent) override {
+                std::lock_guard<std::mutex> lock(st->mtx);
+                const size_t n = frames * 2;
+                if (silent) {
+                    st->samples.insert(st->samples.end(), n, 0.0f);
+                } else {
+                    st->samples.insert(st->samples.end(), scratch.begin(), scratch.begin() + static_cast<std::ptrdiff_t>(n));
+                }
+                return {};
+            }
+            void close() override {}
+        };
+
+        ave::Project audio_proj("WASAPI Session Project");
+        auto snap_store = std::make_shared<ave::PlaybackSnapshotStore>(
+            audio_proj.timeline(), audio_proj.media_pool());
+        ave::PlaybackSessionConfig scfg;
+        scfg.audio_backend_mode = ave::AudioBackendMode::NullForTesting;
+        scfg.audio_sample_rate = 48000;
+        scfg.audio_channels = 2;
+        ave::PlaybackSession audio_session(snap_store, scfg);
+
+        auto ep_state = std::make_shared<SessionMockEndpoint::State>();
+        auto wasapi_dev = std::make_unique<ave::WasapiAudioDevice>([ep_state]() {
+            return std::make_unique<SessionMockEndpoint>(ep_state);
+        });
+        audio_session.set_audio_device(std::move(wasapi_dev));
+
+        const ave::AudioDeviceDiagnostics diag = audio_session.audio_diagnostics();
+        ASSERT_TRUE(diag.available);
+        ASSERT_EQ(diag.backend_name, std::string("WASAPI"));
+        ASSERT_EQ(diag.state, ave::AudioDeviceState::Stopped);
+
+        // Pre-seek stale samples (+0.8f) pushed into ring while paused/stopped, then seek flushes them
+        std::vector<float> stale_pcm(512 * 2, 0.8f);
+        audio_session.seek(ave::Rational{0, 1});
+        // Wait for playback session seek/flush baseline
+        const int resets_before = ep_state->resets.load();
+        // Push stale into device directly + run pause/play/seek
+        ASSERT_TRUE(audio_session.audio_device() != nullptr);
+        audio_session.play();
+        ASSERT_TRUE(audio_session.audio_device()->is_running());
+        audio_session.pause();
+        ASSERT_TRUE(audio_session.audio_device()->is_paused());
+
+        // Write stale +0.8f PCM into device queue and session ring, then seek() -> must flush stale!
+        audio_session.audio_device()->submit_pcm(stale_pcm.data(), 512);
+        audio_session.seek(ave::Rational{1, 4});
+        ASSERT_TRUE(ep_state->resets.load() > resets_before);
+        const size_t offset_after_seek = ep_state->reset_sample_offset.load(std::memory_order_acquire);
+
+        std::vector<float> post_seek_pcm(256 * 2, -0.4f);
+        audio_session.audio_device()->submit_pcm(post_seek_pcm.data(), 256);
+        audio_session.play();
+        ASSERT_TRUE(wait_until([&]() {
+            std::lock_guard<std::mutex> lock(ep_state->mtx);
+            return ep_state->samples.size() >= offset_after_seek + 256 * 2;
+        }));
+        {
+            std::lock_guard<std::mutex> lock(ep_state->mtx);
+            bool saw_post_seek = false;
+            for (size_t i = offset_after_seek; i < ep_state->samples.size(); ++i) {
+                ASSERT_TRUE(std::abs(ep_state->samples[i] - 0.8f) > 0.05f); // Zero stale pre-seek audio
+                if (std::abs(ep_state->samples[i] - (-0.4f)) < 1e-3f) {
+                    saw_post_seek = true;
+                }
+            }
+            ASSERT_TRUE(saw_post_seek);
+        }
+
+        audio_session.stop();
+        ASSERT_EQ(audio_session.audio_diagnostics().state, ave::AudioDeviceState::Stopped);
+        audio_session.shutdown();
+
+        // Inject failed WASAPI endpoint -> MUST NOT silently fall back to NullAudioDevice
+        auto fail_state = std::make_shared<SessionMockEndpoint::State>();
+        fail_state->fail_open = true;
+        ave::PlaybackSession fail_session(snap_store, scfg);
+        fail_session.set_audio_device(std::make_unique<ave::WasapiAudioDevice>([fail_state]() {
+            return std::make_unique<SessionMockEndpoint>(fail_state);
+        }));
+        const ave::AudioDeviceDiagnostics fail_diag = fail_session.audio_diagnostics();
+        ASSERT_EQ(fail_diag.backend_name, std::string("WASAPI"));
+        ASSERT_TRUE(!fail_diag.available);
+        ASSERT_EQ(fail_diag.state, ave::AudioDeviceState::Error);
+        ASSERT_TRUE(!fail_diag.last_error.empty());
+        fail_session.shutdown();
+    }
 
     std::cout << "Playback Integration Test PASSED!" << std::endl;
     return 0;

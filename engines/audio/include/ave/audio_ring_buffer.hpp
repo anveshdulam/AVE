@@ -89,22 +89,26 @@ public:
     }
 
     [[nodiscard]] size_t available_read_frames() const noexcept {
-        size_t w = write_index_.load(std::memory_order_relaxed);
-        size_t r = read_index_.load(std::memory_order_relaxed);
+        size_t w = write_index_.load(std::memory_order_acquire);
+        size_t r = read_index_.load(std::memory_order_acquire);
         size_t avail = (w >= r) ? (w - r) : (sample_capacity_ - (r - w));
         return avail / static_cast<size_t>(channels_);
     }
 
     [[nodiscard]] size_t available_write_frames() const noexcept {
-        size_t r = read_index_.load(std::memory_order_relaxed);
-        size_t w = write_index_.load(std::memory_order_relaxed);
+        size_t r = read_index_.load(std::memory_order_acquire);
+        size_t w = write_index_.load(std::memory_order_acquire);
         size_t avail = (r <= w) ? (sample_capacity_ - (w - r) - 1) : (r - w - 1);
         return avail / static_cast<size_t>(channels_);
     }
 
+    /**
+     * @brief Clears all buffered frames. Caller must ensure the consumer/producer are
+     * quiesced (e.g., audio device stopped, paused, or flushed) before resetting indices.
+     */
     void reset() noexcept {
-        read_index_.store(0, std::memory_order_relaxed);
-        write_index_.store(0, std::memory_order_relaxed);
+        read_index_.store(0, std::memory_order_release);
+        write_index_.store(0, std::memory_order_release);
     }
 
 private:

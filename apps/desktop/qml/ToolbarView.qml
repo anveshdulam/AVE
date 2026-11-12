@@ -448,9 +448,13 @@ Rectangle {
                         width: 7
                         height: 7
                         radius: 3.5
-                        color: (!root.hasLivePlayback || !playbackService.hasGpuAcceleration || !playbackService.compositingEnabled)
+                        color: !root.hasLivePlayback
                                ? "#f59e0b"
-                               : "#10b981"
+                               : (playbackService.audioLastError !== ""
+                                  ? "#ef4444"
+                                  : ((!playbackService.hasGpuAcceleration || !playbackService.compositingEnabled || !playbackService.audioOutputAvailable)
+                                     ? "#f59e0b"
+                                     : "#10b981"))
                     }
                     Text {
                         id: hardwareStatusText
@@ -463,9 +467,13 @@ Rectangle {
                                  + (playbackService.compositingEnabled ? "Compositor Active" : "Compositor Bypassed")
                                  + " | " + Number(playbackService.fps).toFixed(2) + " FPS")
                               : qsTr("Playback Service Offline")
-                        color: (!root.hasLivePlayback || !playbackService.hasGpuAcceleration || !playbackService.compositingEnabled)
+                        color: !root.hasLivePlayback
                                ? "#f59e0b"
-                               : "#10b981"
+                               : (playbackService.audioLastError !== ""
+                                  ? "#ef4444"
+                                  : ((!playbackService.hasGpuAcceleration || !playbackService.compositingEnabled || !playbackService.audioOutputAvailable)
+                                     ? "#f59e0b"
+                                     : "#10b981"))
                         font.bold: true
                         font.pixelSize: 10
 
@@ -475,7 +483,10 @@ Rectangle {
                         ToolTip.visible: hardwareHover.hovered
                         ToolTip.delay: 300
                         ToolTip.text: root.hasLivePlayback
-                                      ? (hardwareStatusText.text + "\n" + playbackService.audioOutputStatus)
+                                      ? (hardwareStatusText.text + "\n" + playbackService.audioOutputStatus
+                                         + (playbackService.audioLastError !== ""
+                                            ? ("\nAudio Error: " + playbackService.audioLastError)
+                                            : ""))
                                       : qsTr("Playback service offline")
                     }
                 }

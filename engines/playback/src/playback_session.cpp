@@ -556,8 +556,11 @@ void PlaybackSession::shutdown() {
         snapshot_listener_id_ = 0;
     }
 
-    if (audio_device_) {
-        audio_device_->stop();
+    {
+        std::lock_guard<std::mutex> dev_lock(audio_device_mutex_);
+        if (audio_device_) {
+            audio_device_->shutdown();
+        }
     }
 
     prefetcher_.stop();
@@ -593,22 +596,72 @@ void PlaybackSession::shutdown() {
     }
 }
 
-void PlaybackSession::init_audio_device() {
-    audio_device_ = std::make_unique<NullAudioDevice>(
-        static_cast<int>(config_.audio_sample_rate),
-        config_.audio_channels,
-        512
-    );
+AudioRenderCallback PlaybackSession::make_audio_render_callback(AudioDevice* dev) noexcept {
+    return [this, dev](float* output, size_t frames, int channels, int) {
+        if (!output || frames == 0 || channels <= 0) {
+            return;
+        }
+        if (!audio_playing_flag_.load(std::memory_order_acquire) ||
+            shut_down_.load(std::memory_order_acquire)) {
+            std::fill_n(output, frames * static_cast<size_t>(channels), 0.0f);
+            audio_left_db_.store(-60.0, std::memory_order_relaxed);
+            audio_right_db_.store(-60.0, std::memory_order_relaxed);
+            return;
+        }
 
-    audio_device_->start([this](float* output, size_t frames, int, int) {
         const size_t read_frames = audio_ring_buffer_.read(output, frames);
-        if (read_frames > 0 && audio_playing_flag_.load(std::memory_order_acquire)) {
+        if (read_frames < frames && dev != nullptr) {
+            dev->report_underrun();
+        }
+        if (read_frames > 0) {
             update_audio_levels_lockfree(output, read_frames);
         } else {
             audio_left_db_.store(-60.0, std::memory_order_relaxed);
             audio_right_db_.store(-60.0, std::memory_order_relaxed);
         }
-    });
+    };
+}
+
+void PlaybackSession::init_audio_device() {
+    AudioDeviceConfig dev_cfg;
+    dev_cfg.sample_rate = static_cast<int>(config_.audio_sample_rate);
+    dev_cfg.channels = config_.audio_channels;
+    dev_cfg.buffer_frames = 512;
+    dev_cfg.sample_format = AudioSampleFormat::Float32;
+
+    std::lock_guard<std::mutex> dev_lock(audio_device_mutex_);
+    if (config_.audio_backend_mode == AudioBackendMode::NullForTesting) {
+        auto null_dev = std::make_unique<NullAudioDevice>(
+            dev_cfg.sample_rate, dev_cfg.channels, dev_cfg.buffer_frames);
+        (void)null_dev->initialize(dev_cfg);
+        audio_device_ = std::move(null_dev);
+        return;
+    }
+
+    std::unique_ptr<AudioDevice> platform_dev = create_platform_audio_device();
+    if (platform_dev) {
+        // Initialize physical backend (WASAPI on Windows). If endpoint initialization fails,
+        // retain the device in its Error state so diagnostics honestly report unavailability
+        // without silently falling back to NullAudioDevice.
+        (void)platform_dev->initialize(dev_cfg);
+        audio_device_ = std::move(platform_dev);
+    }
+}
+
+void PlaybackSession::start_or_resume_audio_device_locked() {
+    if (!audio_device_) {
+        return;
+    }
+    const AudioDeviceState st = audio_device_->state();
+    if (st == AudioDeviceState::Error || st == AudioDeviceState::Uninitialized) {
+        return;
+    }
+    if (st == AudioDeviceState::Paused) {
+        (void)audio_device_->resume();
+    } else if (st == AudioDeviceState::Stopped) {
+        AudioDevice* raw_dev = audio_device_.get();
+        (void)raw_dev->start(make_audio_render_callback(raw_dev));
+    }
 }
 
 void PlaybackSession::update_audio_levels_lockfree(const float* samples, size_t frames) noexcept {
@@ -651,21 +704,50 @@ void PlaybackSession::reset_audio_levels() noexcept {
 }
 
 void PlaybackSession::set_audio_device(std::unique_ptr<AudioDevice> device) {
+    std::lock_guard<std::mutex> dev_lock(audio_device_mutex_);
     if (audio_device_) {
-        audio_device_->stop();
+        audio_device_->shutdown();
     }
     audio_device_ = std::move(device);
-    if (audio_device_) {
-        audio_device_->start([this](float* output, size_t frames, int, int) {
-            const size_t read_frames = audio_ring_buffer_.read(output, frames);
-            if (read_frames > 0 && audio_playing_flag_.load(std::memory_order_acquire)) {
-                update_audio_levels_lockfree(output, read_frames);
-            } else {
-                audio_left_db_.store(-60.0, std::memory_order_relaxed);
-                audio_right_db_.store(-60.0, std::memory_order_relaxed);
-            }
-        });
+    if (!audio_device_) {
+        return;
     }
+
+    if (audio_device_->state() == AudioDeviceState::Uninitialized) {
+        AudioDeviceConfig dev_cfg;
+        dev_cfg.sample_rate = static_cast<int>(config_.audio_sample_rate);
+        dev_cfg.channels = config_.audio_channels;
+        dev_cfg.buffer_frames = 512;
+        dev_cfg.sample_format = AudioSampleFormat::Float32;
+        (void)audio_device_->initialize(dev_cfg);
+    }
+
+    if (!shut_down_.load(std::memory_order_acquire) &&
+        controller_.clock().state() == PlaybackState::Playing) {
+        start_or_resume_audio_device_locked();
+    }
+}
+
+AudioDeviceDiagnostics PlaybackSession::audio_diagnostics() const {
+    std::lock_guard<std::mutex> dev_lock(audio_device_mutex_);
+    if (audio_device_) {
+        return audio_device_->diagnostics();
+    }
+    AudioDeviceDiagnostics missing;
+    missing.available = false;
+    missing.is_physical = false;
+    missing.backend_name = "None";
+    missing.device_name = "None";
+    missing.sample_rate = static_cast<int>(config_.audio_sample_rate);
+    missing.channels = config_.audio_channels;
+    missing.sample_format = AudioSampleFormat::Float32;
+    missing.state = AudioDeviceState::Uninitialized;
+    missing.last_error = "No audio output backend available on this platform";
+    return missing;
+}
+
+std::string PlaybackSession::audio_output_status() const {
+    return audio_diagnostics().format_summary();
 }
 
 void PlaybackSession::set_frame_hub(std::shared_ptr<FramePresentationHub> frame_hub) {
@@ -724,6 +806,13 @@ void PlaybackSession::prepare_for_project_replace() {
     controller_.clock().stop();
     controller_.video_queue().clear();
     {
+        std::lock_guard<std::mutex> dev_lock(audio_device_mutex_);
+        if (audio_device_) {
+            audio_device_->stop();
+            audio_device_->flush();
+        }
+    }
+    {
         std::lock_guard<std::mutex> lock(audio_mutex_);
         for (auto& [asset_id, entry] : audio_decoders_) {
             (void)asset_id;
@@ -750,9 +839,13 @@ void PlaybackSession::play() {
         return;
     }
     controller_.clock().play();
-    audio_playing_flag_.store(true, std::memory_order_release);
-    prefetcher_.start();
     pump_audio(4096);
+    audio_playing_flag_.store(true, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> dev_lock(audio_device_mutex_);
+        start_or_resume_audio_device_locked();
+    }
+    prefetcher_.start();
 }
 
 void PlaybackSession::pause() {
@@ -760,6 +853,10 @@ void PlaybackSession::pause() {
     reset_audio_levels();
     controller_.clock().pause();
     prefetcher_.stop();
+    std::lock_guard<std::mutex> dev_lock(audio_device_mutex_);
+    if (audio_device_ && audio_device_->is_running()) {
+        (void)audio_device_->pause();
+    }
 }
 
 void PlaybackSession::toggle_play() {
@@ -777,6 +874,13 @@ void PlaybackSession::stop() {
     prefetcher_.stop();
     controller_.clock().stop();
     controller_.video_queue().clear();
+    {
+        std::lock_guard<std::mutex> dev_lock(audio_device_mutex_);
+        if (audio_device_) {
+            audio_device_->stop();
+            audio_device_->flush();
+        }
+    }
     audio_ring_buffer_.reset();
     {
         std::lock_guard<std::mutex> lock(audio_mutex_);
@@ -796,9 +900,22 @@ void PlaybackSession::seek(Rational target_pts) {
         target_pts = dur;
     }
 
+    const bool was_playing = (controller_.clock().state() == PlaybackState::Playing);
+    audio_playing_flag_.store(false, std::memory_order_release);
+    reset_audio_levels();
+    {
+        std::lock_guard<std::mutex> dev_lock(audio_device_mutex_);
+        if (audio_device_) {
+            if (was_playing && audio_device_->is_running()) {
+                (void)audio_device_->pause();
+            }
+            audio_device_->flush();
+        }
+    }
+    audio_ring_buffer_.reset();
+
     controller_.seek(target_pts);
     const uint64_t gen = controller_.clock().current_seek_generation();
-    audio_ring_buffer_.reset();
     {
         std::lock_guard<std::mutex> lock(audio_mutex_);
         audio_cursor_pts_ = target_pts;
@@ -809,6 +926,12 @@ void PlaybackSession::seek(Rational target_pts) {
     prefetcher_.trigger();
 
     pump_audio(2048);
+
+    if (was_playing && !shut_down_.load(std::memory_order_acquire)) {
+        audio_playing_flag_.store(true, std::memory_order_release);
+        std::lock_guard<std::mutex> dev_lock(audio_device_mutex_);
+        start_or_resume_audio_device_locked();
+    }
 }
 
 void PlaybackSession::step(int64_t frame_count) {
@@ -827,8 +950,13 @@ void PlaybackSession::step(int64_t frame_count) {
 }
 
 void PlaybackSession::set_speed(double speed) {
+    if (shut_down_.load(std::memory_order_acquire)) {
+        return;
+    }
     controller_.clock().play(speed);
     audio_playing_flag_.store(true, std::memory_order_release);
+    std::lock_guard<std::mutex> dev_lock(audio_device_mutex_);
+    start_or_resume_audio_device_locked();
 }
 
 PlaybackState PlaybackSession::state() const noexcept {
@@ -1217,7 +1345,10 @@ void PlaybackSession::pump_audio(size_t sample_frames_needed) {
 SessionMetrics PlaybackSession::metrics() const {
     SessionMetrics m;
     m.video_metrics = controller_.metrics();
-    m.audio_underruns = (audio_device_ != nullptr) ? audio_device_->underrun_count() : 0;
+    {
+        std::lock_guard<std::mutex> dev_lock(audio_device_mutex_);
+        m.audio_underruns = (audio_device_ != nullptr) ? audio_device_->underrun_count() : 0;
+    }
     m.current_pts = controller_.clock().current_time();
     m.state = controller_.clock().state();
     m.speed = controller_.clock().playback_speed();

@@ -37,12 +37,12 @@ PlaybackService::PlaybackService(ave::PlaybackSession& session,
       snapshot_store_(std::move(snapshot_store)),
       alive_flag_(std::make_shared<std::atomic<bool>>(true)),
       has_gpu_acceleration_(session_.has_vulkan_device()),
-      audio_output_status_(QString::fromStdString(ave::PlaybackSession::audio_output_status())),
       compositing_enabled_(session_.is_compositing_enabled()) {
     const std::string gpu_name = session_.gpu_device_name();
     gpu_device_name_ = gpu_name.empty()
                            ? QStringLiteral("None (CPU Reference Compositor)")
                            : QString::fromStdString(gpu_name);
+    apply_audio_diagnostics(session_.audio_diagnostics(), false);
 
     if (frame_hub_) {
         session_.set_frame_hub(frame_hub_);
@@ -155,6 +155,49 @@ QString PlaybackService::gpuDeviceName() const {
 
 QString PlaybackService::audioOutputStatus() const {
     return audio_output_status_;
+}
+
+bool PlaybackService::audioOutputAvailable() const noexcept {
+    return audio_output_available_;
+}
+
+QString PlaybackService::audioBackendName() const {
+    return audio_backend_name_;
+}
+
+QString PlaybackService::audioDeviceName() const {
+    return audio_device_name_;
+}
+
+int PlaybackService::audioSampleRate() const noexcept {
+    return audio_sample_rate_;
+}
+
+int PlaybackService::audioChannels() const noexcept {
+    return audio_channels_;
+}
+
+QString PlaybackService::audioSampleFormat() const {
+    return audio_sample_format_;
+}
+
+QString PlaybackService::audioDeviceState() const {
+    return audio_device_state_;
+}
+
+quint64 PlaybackService::audioUnderrunCount() const noexcept {
+    return audio_underrun_count_;
+}
+
+QString PlaybackService::audioLastError() const {
+    return audio_last_error_;
+}
+
+void PlaybackService::refreshAudioDiagnostics() {
+    if (shutting_down_.load(std::memory_order_acquire)) {
+        return;
+    }
+    apply_audio_diagnostics(session_.audio_diagnostics(), true);
 }
 
 double PlaybackService::leftLevelDb() const noexcept {
@@ -398,10 +441,55 @@ void PlaybackService::shutdown() {
 
     session_.stop();
     session_.flush_gpu_readback();
+    apply_audio_diagnostics(session_.audio_diagnostics(), false);
 
     is_playing_ = false;
     left_level_db_ = -60.0;
     right_level_db_ = -60.0;
+}
+
+void PlaybackService::apply_audio_diagnostics(const ave::AudioDeviceDiagnostics& diag, bool emit_signal) {
+    const QString next_status = QString::fromStdString(diag.format_summary());
+    const bool next_available = diag.available;
+    const QString next_backend = QString::fromStdString(diag.backend_name);
+    const QString next_device = QString::fromStdString(diag.device_name);
+    const int next_rate = diag.sample_rate;
+    const int next_channels = diag.channels;
+    const QString next_format = QString::fromLatin1(ave::to_string(diag.sample_format));
+    const QString next_state = QString::fromLatin1(ave::to_string(diag.state));
+    const quint64 next_underruns = static_cast<quint64>(diag.underrun_count);
+    const QString next_error = QString::fromStdString(diag.last_error);
+
+    const bool changed =
+        (next_status != audio_output_status_) ||
+        (next_available != audio_output_available_) ||
+        (next_backend != audio_backend_name_) ||
+        (next_device != audio_device_name_) ||
+        (next_rate != audio_sample_rate_) ||
+        (next_channels != audio_channels_) ||
+        (next_format != audio_sample_format_) ||
+        (next_state != audio_device_state_) ||
+        (next_underruns != audio_underrun_count_) ||
+        (next_error != audio_last_error_);
+
+    if (!changed) {
+        return;
+    }
+
+    audio_output_status_ = next_status;
+    audio_output_available_ = next_available;
+    audio_backend_name_ = next_backend;
+    audio_device_name_ = next_device;
+    audio_sample_rate_ = next_rate;
+    audio_channels_ = next_channels;
+    audio_sample_format_ = next_format;
+    audio_device_state_ = next_state;
+    audio_underrun_count_ = next_underruns;
+    audio_last_error_ = next_error;
+
+    if (emit_signal) {
+        emit audioDiagnosticsChanged();
+    }
 }
 
 ave::Rational PlaybackService::clamp_pts_to_timeline(ave::Rational pts) const noexcept {
@@ -501,6 +589,8 @@ void PlaybackService::apply_worker_state(const WorkerUiSnapshot& state) {
         }
     }
 
+    apply_audio_diagnostics(state.audio_diag, true);
+
     // Do not let an in-flight older worker snapshot overwrite a newer GUI seek/transport command.
     if (state.epoch < latest_epoch) {
         return;
@@ -567,6 +657,8 @@ void PlaybackService::on_gui_poll_tick() {
         right_level_db_ = next_right;
         emit audioLevelsChanged();
     }
+
+    apply_audio_diagnostics(session_.audio_diagnostics(), true);
 }
 
 void PlaybackService::worker_loop() {
@@ -643,6 +735,7 @@ void PlaybackService::worker_loop() {
             snap.frame_seq = frame_hub_
                                  ? frame_hub_->latest_sequence_id()
                                  : res.published_sequence_id;
+            snap.audio_diag = session_.audio_diagnostics();
             post_worker_state(snap);
         }
 

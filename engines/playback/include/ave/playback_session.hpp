@@ -26,12 +26,18 @@ class VulkanDevice;
 class VulkanCompositor;
 class VulkanReadbackRing;
 
+enum class AudioBackendMode {
+    AutoPlatformDefault = 0, // Physical WASAPI output on Windows; explicitly reports unavailability on failure
+    NullForTesting           // Deterministic simulated NullAudioDevice for unit tests & headless CI
+};
+
 struct PlaybackSessionConfig {
     Rational prefetch_window{1, 1};             // 1 second lookahead
     size_t video_queue_capacity{12};            // 12 video frames
     uint32_t audio_sample_rate{48000};          // 48 kHz
     int audio_channels{2};                      // Stereo
     size_t audio_buffer_frames{48000};          // 1 second ring buffer
+    AudioBackendMode audio_backend_mode{AudioBackendMode::AutoPlatformDefault};
     bool enable_compositing{true};              // Multi-track compositing enabled by default
     int max_preview_width{kMaxPreviewWidth};    // <= 1280
     int max_preview_height{kMaxPreviewHeight};  // <= 720
@@ -141,9 +147,8 @@ public:
     [[nodiscard]] std::shared_ptr<FramePresentationHub> frame_hub() const noexcept;
     [[nodiscard]] double left_level_db() const noexcept;
     [[nodiscard]] double right_level_db() const noexcept;
-    [[nodiscard]] static std::string audio_output_status() {
-        return "NullAudioDevice (Simulated; Physical WASAPI Deferred)";
-    }
+    [[nodiscard]] AudioDeviceDiagnostics audio_diagnostics() const;
+    [[nodiscard]] std::string audio_output_status() const;
 
     // Compositing & Vulkan readback engine control
     void enable_compositing(bool enable) noexcept { compositing_enabled_.store(enable, std::memory_order_release); }
@@ -169,6 +174,7 @@ private:
 
     AudioMixer audio_mixer_;
     AudioRingBuffer audio_ring_buffer_;
+    mutable std::mutex audio_device_mutex_{};
     std::unique_ptr<AudioDevice> audio_device_;
     std::atomic<bool> audio_playing_flag_{false};
     std::atomic<double> audio_left_db_{-60.0};
@@ -205,6 +211,8 @@ private:
     uint64_t last_audio_snapshot_version_{0};
 
     void init_audio_device();
+    AudioRenderCallback make_audio_render_callback(AudioDevice* dev) noexcept;
+    void start_or_resume_audio_device_locked();
     void update_audio_levels_lockfree(const float* samples, size_t frames) noexcept;
     void reset_audio_levels() noexcept;
     void sync_audio_decoders_on_seek_locked(Rational pts);

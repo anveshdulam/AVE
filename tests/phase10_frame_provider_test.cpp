@@ -525,6 +525,7 @@ TEST(Phase10FrameProviderTest, HardwareVulkanReadbackPingPongResizeInvalidateAnd
     ave::PlaybackSessionConfig cfg;
     cfg.max_preview_width = ave::kDefaultPreviewWidth;
     cfg.max_preview_height = ave::kDefaultPreviewHeight;
+    cfg.audio_backend_mode = ave::AudioBackendMode::NullForTesting;
     ave::PlaybackSession session(store, cfg, hub);
     session.set_vulkan_device(device);
 
@@ -581,7 +582,7 @@ TEST(Phase10FrameProviderTest, HardwareVulkanReadbackPingPongResizeInvalidateAnd
 }
 
 TEST(Phase10FrameProviderTest, PlaybackServiceMetaObjectClampingAndAsyncFrameFlow) {
-    // 1. Exact 12 Q_PROPERTY MetaObject verification
+    // 1. Exact 21 Q_PROPERTY MetaObject verification
     const QMetaObject& mo = ave::desktop::PlaybackService::staticMetaObject;
     struct PropExpectation {
         const char* name;
@@ -589,18 +590,27 @@ TEST(Phase10FrameProviderTest, PlaybackServiceMetaObjectClampingAndAsyncFrameFlo
         bool constant;
     };
     const PropExpectation expected_props[] = {
-        { "isPlaying",          false, false },
-        { "playheadPosition",   false, false },
-        { "durationSeconds",    false, false },
-        { "timecode",           false, false },
-        { "fps",                false, false },
-        { "currentFrameSeq",    false, false },
-        { "compositingEnabled", true,  false },
-        { "hasGpuAcceleration", false, true  },
-        { "gpuDeviceName",      false, true  },
-        { "audioOutputStatus",  false, true  },
-        { "leftLevelDb",        false, false },
-        { "rightLevelDb",       false, false }
+        { "isPlaying",            false, false },
+        { "playheadPosition",     false, false },
+        { "durationSeconds",      false, false },
+        { "timecode",             false, false },
+        { "fps",                  false, false },
+        { "currentFrameSeq",      false, false },
+        { "compositingEnabled",   true,  false },
+        { "hasGpuAcceleration",   false, true  },
+        { "gpuDeviceName",        false, true  },
+        { "audioOutputStatus",    false, false },
+        { "audioOutputAvailable", false, false },
+        { "audioBackendName",     false, false },
+        { "audioDeviceName",      false, false },
+        { "audioSampleRate",      false, false },
+        { "audioChannels",        false, false },
+        { "audioSampleFormat",    false, false },
+        { "audioDeviceState",     false, false },
+        { "audioUnderrunCount",   false, false },
+        { "audioLastError",       false, false },
+        { "leftLevelDb",          false, false },
+        { "rightLevelDb",         false, false }
     };
 
     int custom_count = 0;
@@ -609,7 +619,7 @@ TEST(Phase10FrameProviderTest, PlaybackServiceMetaObjectClampingAndAsyncFrameFlo
         ++custom_count;
         seen.insert(mo.property(i).name());
     }
-    EXPECT_EQ(custom_count, 12);
+    EXPECT_EQ(custom_count, 21);
 
     for (const auto& exp : expected_props) {
         const int idx = mo.indexOfProperty(exp.name);
@@ -631,6 +641,7 @@ TEST(Phase10FrameProviderTest, PlaybackServiceMetaObjectClampingAndAsyncFrameFlo
     ave::PlaybackSessionConfig cfg;
     cfg.max_preview_width = ave::kDefaultPreviewWidth;
     cfg.max_preview_height = ave::kDefaultPreviewHeight;
+    cfg.audio_backend_mode = ave::AudioBackendMode::NullForTesting;
     ave::PlaybackSession session(store, cfg, hub);
     if (device) {
         session.set_vulkan_device(device);
@@ -638,7 +649,9 @@ TEST(Phase10FrameProviderTest, PlaybackServiceMetaObjectClampingAndAsyncFrameFlo
 
     ave::desktop::PlaybackService service(session, hub, store);
     EXPECT_EQ(service.audioOutputStatus(),
-              QStringLiteral("NullAudioDevice (Simulated; Physical WASAPI Deferred)"));
+              QStringLiteral("NullAudioDevice (Simulated / Headless; 48000 Hz, 2ch, float32, Stopped)"));
+    EXPECT_FALSE(service.audioOutputAvailable());
+    EXPECT_EQ(service.audioBackendName(), QStringLiteral("NullAudioDevice"));
     EXPECT_EQ(service.hasGpuAcceleration(), (device != nullptr));
     EXPECT_FALSE(service.gpuDeviceName().isEmpty());
     EXPECT_DOUBLE_EQ(service.leftLevelDb(), -60.0);

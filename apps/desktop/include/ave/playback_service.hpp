@@ -28,11 +28,20 @@ class PlaybackService final : public QObject {
     Q_PROPERTY(double  fps                 READ fps                 NOTIFY fpsChanged)
     Q_PROPERTY(quint64 currentFrameSeq     READ currentFrameSeq     NOTIFY currentFrameSeqChanged)
     Q_PROPERTY(bool    compositingEnabled  READ compositingEnabled  WRITE setCompositingEnabled NOTIFY compositingEnabledChanged)
-    Q_PROPERTY(bool    hasGpuAcceleration  READ hasGpuAcceleration  CONSTANT)
-    Q_PROPERTY(QString gpuDeviceName       READ gpuDeviceName       CONSTANT)
-    Q_PROPERTY(QString audioOutputStatus   READ audioOutputStatus   CONSTANT)
-    Q_PROPERTY(double  leftLevelDb         READ leftLevelDb         NOTIFY audioLevelsChanged)
-    Q_PROPERTY(double  rightLevelDb        READ rightLevelDb        NOTIFY audioLevelsChanged)
+    Q_PROPERTY(bool    hasGpuAcceleration   READ hasGpuAcceleration   CONSTANT)
+    Q_PROPERTY(QString gpuDeviceName        READ gpuDeviceName        CONSTANT)
+    Q_PROPERTY(QString audioOutputStatus    READ audioOutputStatus    NOTIFY audioDiagnosticsChanged)
+    Q_PROPERTY(bool    audioOutputAvailable READ audioOutputAvailable NOTIFY audioDiagnosticsChanged)
+    Q_PROPERTY(QString audioBackendName     READ audioBackendName     NOTIFY audioDiagnosticsChanged)
+    Q_PROPERTY(QString audioDeviceName      READ audioDeviceName      NOTIFY audioDiagnosticsChanged)
+    Q_PROPERTY(int     audioSampleRate      READ audioSampleRate      NOTIFY audioDiagnosticsChanged)
+    Q_PROPERTY(int     audioChannels        READ audioChannels        NOTIFY audioDiagnosticsChanged)
+    Q_PROPERTY(QString audioSampleFormat    READ audioSampleFormat    NOTIFY audioDiagnosticsChanged)
+    Q_PROPERTY(QString audioDeviceState     READ audioDeviceState     NOTIFY audioDiagnosticsChanged)
+    Q_PROPERTY(quint64 audioUnderrunCount   READ audioUnderrunCount   NOTIFY audioDiagnosticsChanged)
+    Q_PROPERTY(QString audioLastError       READ audioLastError       NOTIFY audioDiagnosticsChanged)
+    Q_PROPERTY(double  leftLevelDb          READ leftLevelDb          NOTIFY audioLevelsChanged)
+    Q_PROPERTY(double  rightLevelDb         READ rightLevelDb         NOTIFY audioLevelsChanged)
 
 public:
     explicit PlaybackService(ave::PlaybackSession& session,
@@ -54,7 +63,16 @@ public:
     void setCompositingEnabled(bool enabled);
     [[nodiscard]] bool    hasGpuAcceleration() const noexcept;
     [[nodiscard]] QString gpuDeviceName() const;
-    [[nodiscard]] QString audioOutputStatus() const; // "NullAudioDevice (Simulated; Physical WASAPI Deferred)"
+    [[nodiscard]] QString audioOutputStatus() const;
+    [[nodiscard]] bool    audioOutputAvailable() const noexcept;
+    [[nodiscard]] QString audioBackendName() const;
+    [[nodiscard]] QString audioDeviceName() const;
+    [[nodiscard]] int     audioSampleRate() const noexcept;
+    [[nodiscard]] int     audioChannels() const noexcept;
+    [[nodiscard]] QString audioSampleFormat() const;
+    [[nodiscard]] QString audioDeviceState() const;
+    [[nodiscard]] quint64 audioUnderrunCount() const noexcept;
+    [[nodiscard]] QString audioLastError() const;
     [[nodiscard]] double  leftLevelDb() const noexcept;  // Clamped [-60.0, 0.0] dBFS; -60.0 when stopped
     [[nodiscard]] double  rightLevelDb() const noexcept; // Clamped [-60.0, 0.0] dBFS; -60.0 when stopped
 
@@ -68,6 +86,7 @@ public:
     Q_INVOKABLE void stepBackward(int frames = 1);  // Ignores frames <= 0
     Q_INVOKABLE void setSpeed(double speed);
     Q_INVOKABLE void syncFromTimeline();
+    Q_INVOKABLE void refreshAudioDiagnostics();
     Q_INVOKABLE void shutdown();
 
 signals:
@@ -78,6 +97,7 @@ signals:
     void fpsChanged();
     void currentFrameSeqChanged();
     void compositingEnabledChanged();
+    void audioDiagnosticsChanged();
     void audioLevelsChanged();
 
 private:
@@ -105,12 +125,14 @@ private:
         double left_db{-60.0};
         double right_db{-60.0};
         uint64_t epoch{0};
+        ave::AudioDeviceDiagnostics audio_diag{};
     };
 
     void enqueue_command(WorkerCommand cmd);
     void worker_loop();
     void post_worker_state(const WorkerUiSnapshot& state);
     void apply_worker_state(const WorkerUiSnapshot& state);
+    void apply_audio_diagnostics(const ave::AudioDeviceDiagnostics& diag, bool emit_signal);
     void on_gui_poll_tick();
     void refresh_cached_playhead(ave::Rational pts);
     [[nodiscard]] ave::Rational clamp_pts_to_timeline(ave::Rational pts) const noexcept;
@@ -126,6 +148,15 @@ private:
     bool has_gpu_acceleration_{false};
     QString gpu_device_name_{};
     QString audio_output_status_{};
+    bool audio_output_available_{false};
+    QString audio_backend_name_{};
+    QString audio_device_name_{};
+    int audio_sample_rate_{0};
+    int audio_channels_{0};
+    QString audio_sample_format_{};
+    QString audio_device_state_{};
+    quint64 audio_underrun_count_{0};
+    QString audio_last_error_{};
 
     ave::Rational timeline_fps_{24, 1};
     ave::Rational timeline_duration_{0, 1};

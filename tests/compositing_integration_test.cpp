@@ -90,6 +90,7 @@ int main(int argc, char* argv[]) {
     ave::PlaybackSessionConfig cfg;
     cfg.enable_compositing = true;
     cfg.video_queue_capacity = 8;
+    cfg.audio_backend_mode = ave::AudioBackendMode::NullForTesting;
     ave::PlaybackSession session(snapshot_store, cfg);
     ave::ProjectSnapshotCoordinator coordinator(project, snapshot_store, &session);
 

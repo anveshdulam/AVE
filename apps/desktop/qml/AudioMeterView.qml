@@ -12,6 +12,8 @@ Rectangle {
     readonly property real leftLevelDb: hasLiveService ? playbackService.leftLevelDb : -60.0
     readonly property real rightLevelDb: hasLiveService ? playbackService.rightLevelDb : -60.0
     readonly property real masterLevelDb: Math.max(leftLevelDb, rightLevelDb)
+    readonly property bool audioAvailable: hasLiveService && playbackService.audioOutputAvailable
+    readonly property bool audioHasError: hasLiveService && playbackService.audioLastError !== ""
 
     HoverHandler {
         id: meterHover
@@ -20,7 +22,13 @@ Rectangle {
     ToolTip.visible: meterHover.hovered
     ToolTip.delay: 300
     ToolTip.text: root.hasLiveService
-                  ? playbackService.audioOutputStatus
+                  ? (playbackService.audioOutputStatus
+                     + "\n" + qsTr("State: %1 | Underruns: %2")
+                                .arg(playbackService.audioDeviceState)
+                                .arg(playbackService.audioUnderrunCount)
+                     + (playbackService.audioLastError !== ""
+                        ? ("\n" + qsTr("Error: %1").arg(playbackService.audioLastError))
+                        : ""))
                   : qsTr("No live audio service connected")
 
     function dbToHeightRatio(db) {
@@ -112,13 +120,30 @@ Rectangle {
             }
         }
 
-        // Bottom Channel Labels
+        // Bottom Channel Labels & Audio Output Indicator
         Text {
             Layout.alignment: Qt.AlignHCenter
             text: "L   R"
             color: "#9ca3af"
             font.bold: true
             font.pixelSize: 9
+        }
+
+        Text {
+            Layout.alignment: Qt.AlignHCenter
+            text: !root.hasLiveService
+                  ? "OFF"
+                  : (root.audioHasError
+                     ? "NO AUD"
+                     : (root.audioAvailable ? playbackService.audioBackendName : "SIM"))
+            color: !root.hasLiveService
+                   ? "#6b7280"
+                   : (root.audioHasError
+                      ? "#ef4444"
+                      : (root.audioAvailable ? "#10b981" : "#f59e0b"))
+            font.family: "Consolas, monospace"
+            font.bold: true
+            font.pixelSize: 8
         }
     }
 }
