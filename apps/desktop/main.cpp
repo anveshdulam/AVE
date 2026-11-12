@@ -16,6 +16,7 @@
 #include <QUrl>
 
 #include "ave/ai_studio_service.hpp"
+#include "ave/autosave_service.hpp"
 #include "ave/command.hpp"
 #include "ave/frame_presentation_hub.hpp"
 #include "ave/inspector_service.hpp"
@@ -222,6 +223,7 @@ public:
             *session_, frame_hub_, snapshot_store_);
         ai_studio_service_ = std::make_unique<ave::desktop::AiStudioService>(
             *project_, nullptr, snapshot_store_, snapshot_coordinator_.get());
+        autosave_service_ = std::make_unique<ave::desktop::AutosaveService>(*project_);
 
         QObject::connect(
             media_pool_model_.get(), &ave::desktop::MediaPoolModel::projectMediaMutated,
@@ -237,11 +239,18 @@ public:
             timeline_model_.get(), &ave::desktop::TimelineModel::projectReloaded,
             ai_studio_service_.get(), &ave::desktop::AiStudioService::handle_project_reloaded);
         QObject::connect(
+            timeline_model_.get(), &ave::desktop::TimelineModel::projectStateChanged,
+            autosave_service_.get(), &ave::desktop::AutosaveService::onProjectStateChanged);
+        QObject::connect(
+            timeline_model_.get(), &ave::desktop::TimelineModel::projectReloaded,
+            autosave_service_.get(), &ave::desktop::AutosaveService::onProjectReloaded);
+        QObject::connect(
             ai_studio_service_.get(), &ave::desktop::AiStudioService::proposalApplied,
             playback_service_.get(), &ave::desktop::PlaybackService::syncFromTimeline);
         QObject::connect(
             ai_studio_service_.get(), &ave::desktop::AiStudioService::proposalApplied,
             inspector_service_.get(), &ave::desktop::InspectorService::refreshFromProject);
+        autosave_service_->start();
 
         engine_ = std::make_unique<QQmlApplicationEngine>();
         engine_->addImageProvider(
@@ -266,6 +275,9 @@ public:
     }
 
     void stop_active_workers() {
+        if (autosave_service_) {
+            autosave_service_->shutdown();
+        }
         if (playback_service_) {
             playback_service_->shutdown();
         }
@@ -294,6 +306,7 @@ public:
         if (snapshot_coordinator_) {
             snapshot_coordinator_->unbind();
         }
+        autosave_service_.reset();
         ai_studio_service_.reset();
         inspector_service_.reset();
         timeline_model_.reset();
@@ -336,6 +349,7 @@ private:
     std::unique_ptr<ave::desktop::InspectorService> inspector_service_;
     std::unique_ptr<ave::desktop::PlaybackService> playback_service_;
     std::unique_ptr<ave::desktop::AiStudioService> ai_studio_service_;
+    std::unique_ptr<ave::desktop::AutosaveService> autosave_service_;
     std::unique_ptr<QQmlApplicationEngine> engine_;
 };
 

@@ -1,15 +1,20 @@
 #include "ave/project.hpp"
+#include "ave/project_recovery.hpp"
 #include "ave/otio_interchange.hpp"
 #include "ave/asset_relinker.hpp"
 #include "ave/command.hpp"
 
+#include <atomic>
 #include <iostream>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <cmath>
+#include <condition_variable>
+#include <mutex>
 #include <stdexcept>
 #include <cassert>
+#include <thread>
 
 #define ASSERT_TRUE(cond) \
     do { \
@@ -707,6 +712,291 @@ int main(int argc, char* argv[]) {
                                         ave::Rational{20, 1}, ave::Rational{2, 1}, ave::Rational{0, 1});
         ASSERT_TRUE(moved_assign_proj.execute_command(std::make_unique<ave::InsertClipCommand>(mv_v1, mv_item)).is_success());
         ASSERT_TRUE(moved_assign_proj.undo().is_success());
+    }
+
+    // 10. M1.3C1 Atomic Autosave Engine & Recovery Validation API
+    std::cout << "  Testing M1.3C1 Atomic Autosave Engine & Recovery Validation..." << std::endl;
+    {
+        const std::filesystem::path m13c1_dir = std::filesystem::current_path() / "test_output" / "m13c1_recovery";
+        const std::filesystem::path recovery_dir = m13c1_dir / "app_recovery";
+        std::filesystem::remove_all(m13c1_dir);
+        std::filesystem::create_directories(m13c1_dir);
+
+        // 10a. Default interval is 60 seconds and clean projects never generate autosaves
+        ave::ProjectAutosaveEngine engine(recovery_dir);
+        ASSERT_EQ(engine.interval(), std::chrono::seconds(60));
+        engine.set_interval(std::chrono::milliseconds(50));
+        ASSERT_EQ(engine.interval(), std::chrono::milliseconds(50));
+
+        ave::Project untitled_proj("Untitled Recovery Edit");
+        ASSERT_FALSE(untitled_proj.is_dirty());
+        ASSERT_FALSE(engine.request_autosave(untitled_proj));
+        ASSERT_TRUE(engine.wait_for_idle());
+        ASSERT_EQ(engine.completed_count(), 0u);
+        ASSERT_EQ(ave::RecoveryInspector::inspect_for_project(untitled_proj, recovery_dir).status,
+                  ave::RecoveryStatus::Missing);
+
+        // 10b. Dirty untitled project generates stable UUID-keyed recovery snapshot in recovery_dir without clearing dirty
+        untitled_proj.media_pool_mut().register_asset(ave::MediaAsset(
+            "asset-rec-1", fixture_path, "sample_test.mp4", 48796, "mp4", ave::Rational{3, 1}, {}));
+        const std::string rec_bin = untitled_proj.media_pool_mut().create_bin("Recovery Bin");
+        const std::string rec_sub = untitled_proj.media_pool_mut().create_clip("asset-rec-1", rec_bin, "Take 1");
+        ASSERT_TRUE(untitled_proj.media_pool_mut().set_clip_color_tag(rec_sub, "Amber"));
+        const std::string u_v1 = untitled_proj.timeline().video_tracks()[0].id();
+        ave::TimelineItem u_item("rec-item-1", "mc-rec-1", "asset-rec-1", "Take 1 Cut",
+                                 ave::Rational{1, 1}, ave::Rational{2, 1}, ave::Rational{0, 1});
+        u_item.set_transform(12.5f, -6.0f);
+        u_item.set_opacity(0.75f);
+        ASSERT_TRUE(untitled_proj.execute_command(std::make_unique<ave::InsertClipCommand>(u_v1, u_item)).is_success());
+        const uint64_t rev_before_autosave = untitled_proj.semantic_mutation_revision();
+        ASSERT_TRUE(untitled_proj.is_dirty());
+
+        ASSERT_TRUE(engine.request_autosave(untitled_proj));
+        ASSERT_TRUE(engine.wait_for_idle());
+        ASSERT_EQ(engine.completed_count(), 1u);
+        ASSERT_TRUE(untitled_proj.is_dirty()); // Autosave MUST NOT clear dirty state
+        ASSERT_EQ(untitled_proj.semantic_mutation_revision(), rev_before_autosave);
+        ASSERT_TRUE(untitled_proj.file_path().empty());
+
+        const std::filesystem::path untitled_sidecar =
+            ave::RecoveryInspector::untitled_recovery_path_for(recovery_dir, untitled_proj.id());
+        ASSERT_TRUE(std::filesystem::exists(untitled_sidecar));
+        const ave::RecoveryInfo u_info = ave::RecoveryInspector::inspect_for_project(untitled_proj, recovery_dir);
+        ASSERT_EQ(u_info.status, ave::RecoveryStatus::Valid);
+        ASSERT_EQ(u_info.recovery_format_version, ave::RecoveryInspector::kRecoveryFormatVersion);
+        ASSERT_EQ(u_info.project_id, untitled_proj.id());
+        ASSERT_EQ(u_info.snapshot_revision, rev_before_autosave);
+        ASSERT_TRUE(u_info.snapshot_timestamp_ms > 0);
+        ASSERT_FALSE(u_info.project_sha256.empty());
+
+        const ave::Project restored_untitled = ave::RecoveryInspector::load_recovered_project(untitled_sidecar);
+        ASSERT_EQ(restored_untitled.id(), untitled_proj.id());
+        ASSERT_EQ(restored_untitled.timeline(), untitled_proj.timeline());
+        ASSERT_EQ(restored_untitled.media_pool(), untitled_proj.media_pool());
+        ASSERT_EQ(restored_untitled.timeline().find_item("rec-item-1")->opacity(), 0.75f);
+
+        // 10c. Named project uses <project>.aveproj.autosave sidecar and NEVER modifies the original .aveproj
+        const std::filesystem::path named_proj_path = m13c1_dir / "named_edit.aveproj";
+        ASSERT_TRUE(untitled_proj.save(named_proj_path));
+        ASSERT_FALSE(untitled_proj.is_dirty());
+
+        std::string saved_disk_bytes_before;
+        {
+            std::ifstream ifs(named_proj_path, std::ios::in | std::ios::binary);
+            std::ostringstream ss;
+            ss << ifs.rdbuf();
+            saved_disk_bytes_before = ss.str();
+        }
+
+        ave::TimelineItem u_item2("rec-item-2", "mc-rec-2", "asset-rec-1", "Follow-up Cut",
+                                  ave::Rational{4, 1}, ave::Rational{2, 1}, ave::Rational{0, 1});
+        ASSERT_TRUE(untitled_proj.execute_command(std::make_unique<ave::InsertClipCommand>(u_v1, u_item2)).is_success());
+        ASSERT_TRUE(untitled_proj.is_dirty());
+        ASSERT_TRUE(engine.request_autosave(untitled_proj));
+        ASSERT_TRUE(engine.wait_for_idle());
+        ASSERT_TRUE(untitled_proj.is_dirty());
+        ASSERT_EQ(untitled_proj.file_path(), named_proj_path);
+
+        const std::filesystem::path named_sidecar = ave::RecoveryInspector::named_recovery_path_for(named_proj_path);
+        ASSERT_TRUE(std::filesystem::exists(named_sidecar));
+        ASSERT_EQ(ave::RecoveryInspector::inspect_for_project(untitled_proj, recovery_dir).status,
+                  ave::RecoveryStatus::Valid);
+
+        std::string saved_disk_bytes_after;
+        {
+            std::ifstream ifs(named_proj_path, std::ios::in | std::ios::binary);
+            std::ostringstream ss;
+            ss << ifs.rdbuf();
+            saved_disk_bytes_after = ss.str();
+        }
+        ASSERT_EQ(saved_disk_bytes_after, saved_disk_bytes_before);
+
+        // 10d. Failed write preserves previous valid recovery file and leaves no orphaned temp files
+        const std::filesystem::path blocker_tmp = std::filesystem::path(named_sidecar.string() + ".tmp");
+        std::filesystem::create_directories(blocker_tmp / "nested");
+
+        untitled_proj.set_name("Edited While Temp Blocked");
+        ASSERT_TRUE(engine.request_autosave(untitled_proj));
+        ASSERT_TRUE(engine.wait_for_idle());
+        ASSERT_FALSE(engine.last_result().succeeded);
+        ASSERT_TRUE(engine.failed_count() >= 1u);
+        std::filesystem::remove_all(blocker_tmp);
+
+        const ave::RecoveryInfo preserved_info = ave::RecoveryInspector::inspect_file(named_sidecar);
+        ASSERT_EQ(preserved_info.status, ave::RecoveryStatus::Valid);
+        ASSERT_EQ(preserved_info.project_name, "Untitled Recovery Edit");
+
+        // Now unblock and retry on normal (non-forced) request -> failed attempt must NOT poison dedup
+        ASSERT_TRUE(engine.request_autosave(untitled_proj, false));
+        ASSERT_TRUE(engine.wait_for_idle());
+        ASSERT_TRUE(engine.last_result().succeeded);
+        const ave::RecoveryInfo updated_info = ave::RecoveryInspector::inspect_file(named_sidecar);
+        ASSERT_EQ(updated_info.status, ave::RecoveryStatus::Valid);
+        ASSERT_EQ(updated_info.project_name, "Edited While Temp Blocked");
+
+        // 10e. Stale detection: crash scenario stays Valid; normal save marks obsolete recovery Stale
+        {
+            // Simulated restart after crash (disk .aveproj unchanged while autosave holds newer edits) -> Valid!
+            ave::Project disk_reloaded = ave::Project::load(named_proj_path);
+            ASSERT_EQ(ave::RecoveryInspector::inspect_for_project(disk_reloaded, recovery_dir).status,
+                      ave::RecoveryStatus::Valid);
+        }
+
+        // Case 1: Normal save at exact autosaved state -> Stale
+        ASSERT_TRUE(untitled_proj.save(named_proj_path));
+        ASSERT_EQ(ave::RecoveryInspector::inspect_for_project(untitled_proj, recovery_dir).status,
+                  ave::RecoveryStatus::Stale);
+        ASSERT_EQ(ave::RecoveryInspector::inspect_file(named_sidecar).status, ave::RecoveryStatus::Stale);
+
+        // Case 2: Edit -> autosave (rev A) -> further edit -> normal save (rev B) -> old autosave (rev A) is Stale!
+        untitled_proj.set_name("Rev A");
+        ASSERT_TRUE(engine.request_autosave(untitled_proj, true));
+        ASSERT_TRUE(engine.wait_for_idle());
+        untitled_proj.set_name("Rev B Saved");
+        ASSERT_TRUE(untitled_proj.save(named_proj_path));
+        ASSERT_EQ(ave::RecoveryInspector::inspect_for_project(untitled_proj, recovery_dir).status,
+                  ave::RecoveryStatus::Stale);
+        ASSERT_EQ(ave::RecoveryInspector::inspect_file(named_sidecar).status, ave::RecoveryStatus::Stale);
+
+        // 10f. Corrupt recovery snapshot detection (checksum tamper, syntax error, version mismatch)
+        const std::filesystem::path corrupt_copy = m13c1_dir / "corrupt_tampered.autosave";
+        std::filesystem::copy_file(named_sidecar, corrupt_copy, std::filesystem::copy_options::overwrite_existing);
+        {
+            std::string json_text;
+            {
+                std::ifstream ifs(corrupt_copy, std::ios::in | std::ios::binary);
+                std::ostringstream ss;
+                ss << ifs.rdbuf();
+                json_text = ss.str();
+            }
+            const std::size_t pos = json_text.find("Rev A");
+            ASSERT_TRUE(pos != std::string::npos);
+            json_text.replace(pos, 5, "Rev Z"); // Tamper without updating checksums
+            std::ofstream ofs(corrupt_copy, std::ios::out | std::ios::binary | std::ios::trunc);
+            ofs << json_text;
+        }
+        ASSERT_EQ(ave::RecoveryInspector::inspect_file(corrupt_copy).status, ave::RecoveryStatus::Corrupt);
+
+        const std::filesystem::path malformed_rec = m13c1_dir / "broken.autosave";
+        {
+            std::ofstream ofs(malformed_rec, std::ios::out | std::ios::binary | std::ios::trunc);
+            ofs << "{not valid json";
+        }
+        ASSERT_EQ(ave::RecoveryInspector::inspect_file(malformed_rec).status, ave::RecoveryStatus::Corrupt);
+
+        // 10g. Duplicate concurrent write prevention + newer snapshot cannot be overwritten by older async write
+        {
+            ave::ProjectAutosaveEngine race_engine(recovery_dir);
+            ave::Project race_proj("Race Project Baseline");
+            const std::filesystem::path race_proj_path = m13c1_dir / "race_proj.aveproj";
+            ASSERT_TRUE(race_proj.save(race_proj_path));
+
+            race_proj.set_name("Snapshot Seq 1");
+            const uint64_t seq1 = race_engine.allocate_capture_sequence();
+            auto cap1 = ave::ProjectAutosaveEngine::capture_snapshot_if_dirty(race_proj, recovery_dir, seq1);
+            ASSERT_TRUE(cap1.has_value());
+
+            race_proj.set_name("Snapshot Seq 2 Newer");
+            const uint64_t seq2 = race_engine.allocate_capture_sequence();
+            auto cap2 = ave::ProjectAutosaveEngine::capture_snapshot_if_dirty(race_proj, recovery_dir, seq2);
+            ASSERT_TRUE(cap2.has_value());
+
+            std::mutex hook_mu;
+            std::condition_variable hook_cv;
+            bool seq1_paused_at_hook = false;
+            bool release_seq1 = false;
+
+            race_engine.set_pre_replace_hook_for_test([&](const ave::AutosaveCapture& c) {
+                if (c.capture_seq == seq1) {
+                    std::unique_lock<std::mutex> lk(hook_mu);
+                    seq1_paused_at_hook = true;
+                    hook_cv.notify_all();
+                    hook_cv.wait(lk, [&]() { return release_seq1; });
+                }
+            });
+
+            ave::AutosaveWriteResult res1;
+            std::thread t1([&]() {
+                res1 = race_engine.commit_capture_blocking(*cap1);
+            });
+
+            {
+                std::unique_lock<std::mutex> lk(hook_mu);
+                ASSERT_TRUE(hook_cv.wait_for(lk, std::chrono::seconds(3), [&]() { return seq1_paused_at_hook; }));
+            }
+
+            // While older write #1 is paused right before atomic rename, commit newer snapshot #2
+            const ave::AutosaveWriteResult res2 = race_engine.commit_capture_blocking(*cap2);
+            ASSERT_TRUE(res2.succeeded);
+
+            {
+                std::lock_guard<std::mutex> lk(hook_mu);
+                release_seq1 = true;
+            }
+            hook_cv.notify_all();
+            t1.join();
+
+            ASSERT_FALSE(res1.succeeded);
+            ASSERT_TRUE(res1.superseded);
+
+            const ave::RecoveryInfo final_race = ave::RecoveryInspector::inspect_file(cap2->target_recovery_path);
+            ASSERT_EQ(final_race.status, ave::RecoveryStatus::Valid);
+            ASSERT_EQ(final_race.snapshot_revision, cap2->snapshot_revision);
+            ASSERT_EQ(final_race.project_name, "Snapshot Seq 2 Newer");
+        }
+
+        // 10h. Duplicate concurrent request_autosave coalesces to reschedule + worker cancellation/shutdown is safe
+        {
+            ave::ProjectAutosaveEngine cancel_engine(recovery_dir);
+            ave::Project cancel_proj("Cancel Shutdown Proj");
+            cancel_proj.set_name("In-Flight Capture");
+
+            std::mutex m;
+            std::condition_variable cv;
+            bool inside_worker = false;
+            bool allow_worker_finish = false;
+
+            cancel_engine.set_pre_replace_hook_for_test([&](const ave::AutosaveCapture&) {
+                std::unique_lock<std::mutex> lk(m);
+                inside_worker = true;
+                cv.notify_all();
+                cv.wait(lk, [&]() { return allow_worker_finish; });
+            });
+
+            ASSERT_TRUE(cancel_engine.request_autosave(cancel_proj));
+            {
+                std::unique_lock<std::mutex> lk(m);
+                ASSERT_TRUE(cv.wait_for(lk, std::chrono::seconds(3), [&]() { return inside_worker; }));
+            }
+
+            // Second request while write is active MUST NOT launch duplicate job; sets pending reschedule only
+            cancel_proj.set_name("Edited During Write");
+            ASSERT_FALSE(cancel_engine.request_autosave(cancel_proj));
+            ASSERT_TRUE(cancel_engine.has_pending_reschedule());
+            ASSERT_TRUE(cancel_proj.is_dirty());
+
+            // Request shutdown while worker was paused, then unblock worker -> must cancel cleanly and join!
+            std::atomic<bool> stopper_entered{false};
+            std::thread stopper([&]() {
+                stopper_entered.store(true, std::memory_order_release);
+                cancel_engine.shutdown();
+            });
+            while (!stopper_entered.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            {
+                std::lock_guard<std::mutex> lk(m);
+                allow_worker_finish = true;
+            }
+            cv.notify_all();
+            stopper.join();
+            ASSERT_EQ(ave::RecoveryInspector::inspect_for_project(cancel_proj, recovery_dir).status,
+                      ave::RecoveryStatus::Missing);
+            ASSERT_FALSE(cancel_engine.request_autosave(cancel_proj));
+        }
+
+        engine.shutdown();
     }
 
     // Clean up temporary files

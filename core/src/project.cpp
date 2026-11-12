@@ -24,6 +24,7 @@ Project::Project(std::string id, std::string name, std::string schema_version)
       media_pool_(),
       command_history_(),
       clean_name_(name_),
+      saved_mutation_revision_(0),
       clean_media_pool_revision_(media_pool_.mutation_revision()),
       clean_media_pool_digest_(media_pool_.content_digest()) {
     bind_internal_listeners();
@@ -43,6 +44,7 @@ Project::Project(Project&& other)
       command_history_(std::move(other.command_history_)),
       clean_name_(std::move(other.clean_name_)),
       metadata_revision_(other.metadata_revision_),
+      saved_mutation_revision_(other.saved_mutation_revision_),
       clean_media_pool_revision_(other.clean_media_pool_revision_),
       clean_media_pool_digest_(other.clean_media_pool_digest_) {
     // Member initializers moved other's subobjects into this instance, so remove
@@ -75,6 +77,7 @@ Project& Project::operator=(Project&& other) {
     command_history_ = std::move(other.command_history_);
     clean_name_ = std::move(other.clean_name_);
     metadata_revision_ = other.metadata_revision_;
+    saved_mutation_revision_ = other.saved_mutation_revision_;
     clean_media_pool_revision_ = other.clean_media_pool_revision_;
     clean_media_pool_digest_ = other.clean_media_pool_digest_;
     listeners_.clear();
@@ -104,6 +107,7 @@ void Project::mark_clean() noexcept {
     clean_name_ = name_;
     clean_media_pool_revision_ = media_pool_.mutation_revision();
     clean_media_pool_digest_ = media_pool_.content_digest();
+    saved_mutation_revision_ = semantic_mutation_revision();
     command_history_.mark_clean();
 }
 

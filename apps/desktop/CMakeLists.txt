@@ -2,6 +2,7 @@ find_package(Qt6 6.8.3 REQUIRED COMPONENTS Core Gui Quick Qml QuickControls2 Tes
 
 add_library(ave_desktop_services STATIC
     src/ai_studio_service.cpp
+    src/autosave_service.cpp
     src/inspector_service.cpp
     src/live_frame_image_provider.cpp
     src/media_pool_model.cpp
@@ -10,6 +11,7 @@ add_library(ave_desktop_services STATIC
     src/timeline_snapping.cpp
     src/timeline_viewport.cpp
     include/ave/ai_studio_service.hpp
+    include/ave/autosave_service.hpp
     include/ave/inspector_service.hpp
     include/ave/live_frame_image_provider.hpp
     include/ave/media_pool_model.hpp

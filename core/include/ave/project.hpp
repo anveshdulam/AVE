@@ -58,6 +58,7 @@ public:
     [[nodiscard]] bool is_dirty() const noexcept;
     void mark_clean() noexcept;
     [[nodiscard]] uint64_t semantic_mutation_revision() const noexcept;
+    [[nodiscard]] uint64_t saved_mutation_revision() const noexcept { return saved_mutation_revision_; }
 
     ListenerId add_change_listener_with_id(ChangeListener listener);
     void remove_change_listener(ListenerId id);
@@ -102,6 +103,7 @@ private:
 
     std::string clean_name_{"Untitled Project"};
     uint64_t metadata_revision_{0};
+    uint64_t saved_mutation_revision_{0};
     uint64_t clean_media_pool_revision_{0};
     uint64_t clean_media_pool_digest_{0};
     CommandHistory::ListenerId internal_history_listener_id_{0};

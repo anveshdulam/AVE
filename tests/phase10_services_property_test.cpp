@@ -1,5 +1,6 @@
 #include "ave/ai_studio_service.hpp"
 #include "ave/asset_relinker.hpp"
+#include "ave/autosave_service.hpp"
 #include "ave/command.hpp"
 #include "ave/frame_presentation_hub.hpp"
 #include "ave/inspector_service.hpp"
@@ -1483,6 +1484,109 @@ TEST(Phase10ServicesPropertyTest, M13BProjectLifecycleDialogAndCloseFlows) {
     frame_hub.reset();
     snapshot_store.reset();
     project.reset();
+}
+
+TEST(Phase10ServicesPropertyTest, M13C1AutosaveServiceTimerAndLifecycleIntegration) {
+    ScopedTempDir tmp("ave_m13c1_qt");
+    const std::filesystem::path rec_dir = tmp.path / "recovery";
+    const std::filesystem::path proj_file = tmp.path / "desktop_autosave.aveproj";
+
+    ave::Project project("Qt Autosave Session");
+    auto store = std::make_shared<ave::PlaybackSnapshotStore>(project.timeline(), project.media_pool());
+    ave::ProjectSnapshotCoordinator coordinator(project, store);
+    ave::desktop::TimelineModel timeline_model(project, nullptr, &coordinator);
+
+    EXPECT_EQ(ave::desktop::AutosaveService::kDefaultAutosaveIntervalMs, 60000);
+
+    ave::desktop::AutosaveService autosave(project, rec_dir, 25);
+    EXPECT_EQ(autosave.intervalMs(), 25);
+    EXPECT_FALSE(autosave.isRunning());
+
+    QObject::connect(&timeline_model, &ave::desktop::TimelineModel::projectStateChanged,
+                     &autosave, &ave::desktop::AutosaveService::onProjectStateChanged);
+    QObject::connect(&timeline_model, &ave::desktop::TimelineModel::projectReloaded,
+                     &autosave, &ave::desktop::AutosaveService::onProjectReloaded);
+
+    QSignalSpy ok_spy(&autosave, &ave::desktop::AutosaveService::autosaveSucceeded);
+    QSignalSpy fail_spy(&autosave, &ave::desktop::AutosaveService::autosaveFailed);
+
+    autosave.start();
+    EXPECT_TRUE(autosave.isRunning());
+
+    // 1. Clean project must NOT produce any autosave file across multiple timer ticks
+    pump_events_until([]() { return false; }, 100);
+    EXPECT_EQ(ok_spy.count(), 0);
+    EXPECT_EQ(fail_spy.count(), 0);
+    EXPECT_EQ(autosave.completedCount(), 0u);
+    EXPECT_FALSE(std::filesystem::exists(autosave.currentRecoveryPath()));
+    EXPECT_EQ(autosave.inspectCurrentProjectRecovery().status, ave::RecoveryStatus::Missing);
+
+    // 2. Dirty project automatically triggers periodic timer autosave into untitled UUID sidecar
+    project.media_pool_mut().register_asset(
+        make_synthetic_av_asset("asset-auto-1", "Shot A", "shot_a.mp4", ave::Rational{4, 1}));
+    const std::string v1 = project.timeline().video_tracks()[0].id();
+    ASSERT_TRUE(timeline_model.insertClipFromAsset(
+        QStringLiteral("asset-auto-1"), QString::fromStdString(v1), 0.0));
+    ASSERT_TRUE(timeline_model.isDirty());
+
+    pump_events_until([&ok_spy]() { return ok_spy.count() >= 1; }, 2000);
+    ASSERT_EQ(ok_spy.count(), 1);
+    EXPECT_EQ(fail_spy.count(), 0);
+    EXPECT_TRUE(timeline_model.isDirty());
+    EXPECT_TRUE(project.is_dirty());
+    EXPECT_TRUE(project.file_path().empty());
+
+    const std::filesystem::path untitled_sidecar = autosave.currentRecoveryPath();
+    EXPECT_TRUE(std::filesystem::exists(untitled_sidecar));
+    const ave::RecoveryInfo rec_untitled = autosave.inspectCurrentProjectRecovery();
+    EXPECT_EQ(rec_untitled.status, ave::RecoveryStatus::Valid);
+    EXPECT_EQ(rec_untitled.snapshot_revision, project.semantic_mutation_revision());
+
+    // Further idle timer ticks with identical clean-for-autosave revision must NOT spam duplicate writes
+    pump_events_until([]() { return false; }, 100);
+    EXPECT_EQ(ok_spy.count(), 1);
+
+    // 3. Normal saveProject writes .aveproj independently, clears dirty state, and marks prior recovery Stale
+    ASSERT_TRUE(timeline_model.saveProject(QString::fromStdWString(proj_file.wstring())));
+    EXPECT_FALSE(timeline_model.isDirty());
+    EXPECT_FALSE(project.is_dirty());
+    EXPECT_EQ(ave::RecoveryInspector::inspect_file(untitled_sidecar, proj_file, project.saved_mutation_revision()).status,
+              ave::RecoveryStatus::Stale);
+
+    // 4. Subsequent edit creates named <proj>.aveproj.autosave without altering .aveproj on disk
+    std::string saved_disk_bytes_before;
+    {
+        std::ifstream ifs(proj_file, std::ios::in | std::ios::binary);
+        std::ostringstream ss;
+        ss << ifs.rdbuf();
+        saved_disk_bytes_before = ss.str();
+    }
+
+    const int ok_before_named = ok_spy.count();
+    project.set_name("Edited After Normal Save");
+    EXPECT_TRUE(timeline_model.isDirty());
+
+    pump_events_until([&ok_spy, ok_before_named]() { return ok_spy.count() > ok_before_named; }, 2000);
+    ASSERT_EQ(ok_spy.count(), ok_before_named + 1);
+    EXPECT_TRUE(timeline_model.isDirty());
+
+    const std::filesystem::path named_sidecar = ave::RecoveryInspector::named_recovery_path_for(proj_file);
+    EXPECT_EQ(autosave.currentRecoveryPath(), named_sidecar);
+    EXPECT_TRUE(std::filesystem::exists(named_sidecar));
+    EXPECT_EQ(autosave.inspectCurrentProjectRecovery().status, ave::RecoveryStatus::Valid);
+
+    std::string saved_disk_bytes_after;
+    {
+        std::ifstream ifs(proj_file, std::ios::in | std::ios::binary);
+        std::ostringstream ss;
+        ss << ifs.rdbuf();
+        saved_disk_bytes_after = ss.str();
+    }
+    EXPECT_EQ(saved_disk_bytes_after, saved_disk_bytes_before);
+
+    autosave.shutdown();
+    EXPECT_FALSE(autosave.isRunning());
+    coordinator.unbind();
 }
 
 int main(int argc, char** argv) {

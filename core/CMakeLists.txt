@@ -6,6 +6,7 @@ add_library(ave_core STATIC
     src/timeline.cpp
     src/command.cpp
     src/project.cpp
+    src/project_recovery.cpp
     src/otio_interchange.cpp
     src/asset_relinker.cpp
     include/ave/time.hpp
@@ -17,6 +18,7 @@ add_library(ave_core STATIC
     include/ave/video_frame.hpp
     include/ave/command.hpp
     include/ave/project.hpp
+    include/ave/project_recovery.hpp
     include/ave/otio_interchange.hpp
     include/ave/asset_relinker.hpp
 )
