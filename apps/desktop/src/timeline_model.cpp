@@ -7,6 +7,7 @@
 #include "ave/otio_interchange.hpp"
 #include "ave/playback_snapshot.hpp"
 #include "ave/project.hpp"
+#include "ave/project_recovery.hpp"
 #include "ave/time.hpp"
 #include "ave/timeline.hpp"
 #include "ave/uuid.hpp"
@@ -574,9 +575,41 @@ bool TimelineModel::openProject(const QString& filePath) {
 
     try {
         ave::Project loaded = ave::Project::load(src);
-        return replace_active_project(std::move(loaded));
+        const QString opened_path = QString::fromStdWString(loaded.file_path().wstring());
+        if (replace_active_project(std::move(loaded))) {
+            if (!opened_path.isEmpty()) {
+                emit projectOpened(opened_path);
+            }
+            return true;
+        }
+        return false;
     } catch (const std::exception&) {
         last_project_error_ = tr("Could not load the selected project file because its contents are invalid.");
+        return false;
+    }
+}
+
+bool TimelineModel::restoreRecoveredProject(const QString& recoveryFilePath, const QString& expectedProjectPath) {
+    last_project_error_.clear();
+    const std::filesystem::path rec_path = local_path_from_qstring(recoveryFilePath);
+    if (rec_path.empty()) {
+        last_project_error_ = tr("No recovery file was selected.");
+        return false;
+    }
+
+    const std::filesystem::path expected_path = local_path_from_qstring(expectedProjectPath);
+    try {
+        ave::Project recovered = ave::RecoveryInspector::load_recovered_project(rec_path, expected_path);
+        const QString reopened_path = QString::fromStdWString(recovered.file_path().wstring());
+        if (replace_active_project(std::move(recovered))) {
+            if (!reopened_path.isEmpty()) {
+                emit projectOpened(reopened_path);
+            }
+            return true;
+        }
+        return false;
+    } catch (const std::exception&) {
+        last_project_error_ = tr("Could not restore this recovery snapshot because its data is damaged, outdated, or does not match the project.");
         return false;
     }
 }
@@ -601,6 +634,9 @@ bool TimelineModel::saveProject(const QString& filePath) {
         return false;
     }
 
+    const QString prev_path = QString::fromStdWString(project_.file_path().wstring());
+    const QString proj_id = QString::fromStdString(project_.id());
+
     bool ok = false;
     try {
         ok = project_.save(dst);
@@ -611,10 +647,19 @@ bool TimelineModel::saveProject(const QString& filePath) {
 
     if (ok) {
         sync_from_project(false, false);
+        emit projectSaved(
+            QString::fromStdWString(project_.file_path().wstring()),
+            prev_path,
+            static_cast<quint64>(project_.saved_mutation_revision()),
+            proj_id);
     } else {
         last_project_error_ = tr("Could not save the project file. Check that the destination folder is writable.");
     }
     return ok;
+}
+
+QString TimelineModel::currentProjectId() const {
+    return QString::fromStdString(project_.id());
 }
 
 QString TimelineModel::lastProjectError() const {

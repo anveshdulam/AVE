@@ -69,6 +69,13 @@ struct AutosaveWriteResult {
     std::string error_message{};
 };
 
+struct RecoveryCleanupResult {
+    bool succeeded{true};
+    std::size_t removed_count{0};
+    std::size_t preserved_count{0};
+    std::string error_message{};
+};
+
 class RecoveryInspector {
 public:
     static constexpr int kRecoveryFormatVersion = 1;
@@ -103,7 +110,9 @@ public:
         const std::filesystem::path& recovery_dir);
 
     [[nodiscard]] static Project load_recovered_project(
-        const std::filesystem::path& recovery_file_path);
+        const std::filesystem::path& recovery_file_path,
+        const std::filesystem::path& expected_project_path = {},
+        const std::string& expected_project_id = {});
 };
 
 class ProjectAutosaveEngine {
@@ -160,6 +169,16 @@ public:
 
     bool wait_for_idle(std::chrono::milliseconds timeout = std::chrono::seconds{5});
     void reset_session_tracking();
+    [[nodiscard]] RecoveryCleanupResult discard_recovery_file(
+        const std::filesystem::path& recovery_file_path);
+    [[nodiscard]] RecoveryCleanupResult discard_for_project(
+        const std::string& project_id,
+        const std::filesystem::path& project_file_path = {});
+    [[nodiscard]] RecoveryCleanupResult cleanup_after_save(
+        const std::string& project_id,
+        const std::filesystem::path& saved_path,
+        const std::filesystem::path& previous_path,
+        uint64_t saved_revision);
     void shutdown();
 
 private:
@@ -195,6 +214,7 @@ private:
 
     std::unordered_map<std::string, uint64_t> highest_submitted_seq_by_target_{};
     std::unordered_map<std::string, uint64_t> highest_committed_seq_by_target_{};
+    std::unordered_map<std::string, uint64_t> min_allowed_seq_by_target_{};
 
     AutosaveWriteResult last_result_{};
     std::function<void(const AutosaveWriteResult&)> completion_callback_{};

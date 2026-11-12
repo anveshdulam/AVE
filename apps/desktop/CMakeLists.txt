@@ -75,6 +75,7 @@ qt_add_resources(ave_desktop "ave_desktop_qml"
         qml/TrackHeaderView.qml
         qml/AudioMeterView.qml
         qml/InspectorView.qml
+        qml/RecoveryDialog.qml
 )
 
 target_include_directories(ave_desktop PUBLIC

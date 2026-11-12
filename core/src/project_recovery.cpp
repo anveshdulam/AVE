@@ -201,6 +201,20 @@ ParsedRecoveryEnvelope parse_and_validate_recovery_file(const std::filesystem::p
         return parsed_env;
     }
 
+    // Best-effort metadata for presenting Corrupt diagnostics without trusting payload contents.
+    if (root.contains("project_id") && root.at("project_id").is_string()) {
+        parsed_env.info.project_id = root.at("project_id").get<std::string>();
+    }
+    if (root.contains("project_name") && root.at("project_name").is_string()) {
+        parsed_env.info.project_name = root.at("project_name").get<std::string>();
+    }
+    if (root.contains("original_project_path") && root.at("original_project_path").is_string()) {
+        parsed_env.info.original_project_path = utf8_to_path(root.at("original_project_path").get<std::string>());
+    }
+    if (root.contains("snapshot_timestamp_ms") && root.at("snapshot_timestamp_ms").is_number_integer()) {
+        parsed_env.info.snapshot_timestamp_ms = root.at("snapshot_timestamp_ms").get<int64_t>();
+    }
+
     auto fail_corrupt = [&parsed_env](std::string msg) -> ParsedRecoveryEnvelope {
         parsed_env.info.status = RecoveryStatus::Corrupt;
         parsed_env.info.detail_message = std::move(msg);
@@ -329,8 +343,8 @@ void evaluate_staleness(ParsedRecoveryEnvelope& parsed_env,
     }
 
     if (!disk_fp.project_id.empty() && disk_fp.project_id != parsed_env.info.project_id) {
-        parsed_env.info.status = RecoveryStatus::Stale;
-        parsed_env.info.detail_message = "Target project file has a different project identity.";
+        parsed_env.info.status = RecoveryStatus::Corrupt;
+        parsed_env.info.detail_message = "Recovery snapshot project identity does not match the target project file.";
         return;
     }
 
@@ -529,8 +543,15 @@ std::vector<RecoveryInfo> RecoveryInspector::scan_recovery_directory(
     return results;
 }
 
-Project RecoveryInspector::load_recovered_project(const std::filesystem::path& recovery_file_path) {
-    const ParsedRecoveryEnvelope parsed_env = parse_and_validate_recovery_file(recovery_file_path);
+Project RecoveryInspector::load_recovered_project(
+    const std::filesystem::path& recovery_file_path,
+    const std::filesystem::path& expected_project_path,
+    const std::string& expected_project_id) {
+    ParsedRecoveryEnvelope parsed_env = parse_and_validate_recovery_file(recovery_file_path);
+    const std::filesystem::path identity_ref_path =
+        expected_project_path.empty() ? parsed_env.info.original_project_path : expected_project_path;
+    evaluate_staleness(parsed_env, identity_ref_path, std::nullopt);
+
     if (parsed_env.info.status != RecoveryStatus::Valid) {
         throw std::runtime_error(
             parsed_env.info.detail_message.empty()
@@ -538,10 +559,26 @@ Project RecoveryInspector::load_recovered_project(const std::filesystem::path& r
                 : parsed_env.info.detail_message);
     }
 
+    if (!expected_project_id.empty() && parsed_env.info.project_id != expected_project_id) {
+        throw std::runtime_error("Recovery snapshot project identity does not match expected project.");
+    }
+
+    if (!expected_project_path.empty() &&
+        !parsed_env.info.original_project_path.empty() &&
+        !same_project_path_or_empty(expected_project_path, parsed_env.info.original_project_path)) {
+        const DiskProjectFingerprint disk_fp = fingerprint_project_file(expected_project_path);
+        if (!disk_fp.valid || disk_fp.project_id.empty() || disk_fp.project_id != parsed_env.info.project_id) {
+            throw std::runtime_error("Recovery snapshot does not belong to the target project file.");
+        }
+    }
+
     Project proj = Project::from_json(parsed_env.project_json_obj.dump());
-    if (!parsed_env.info.original_project_path.empty()) {
+    if (!expected_project_path.empty()) {
+        proj.set_file_path(expected_project_path);
+    } else if (!parsed_env.info.original_project_path.empty()) {
         proj.set_file_path(parsed_env.info.original_project_path);
     }
+    proj.mark_dirty_from_recovery(parsed_env.info.snapshot_revision);
     return proj;
 }
 
@@ -725,6 +762,12 @@ AutosaveWriteResult ProjectAutosaveEngine::commit_capture_blocking(const Autosav
     const std::string target_key = normalize_path_key(capture.target_recovery_path);
     {
         std::lock_guard<std::mutex> flock(fence_mutex_);
+        const auto mit = min_allowed_seq_by_target_.find(target_key);
+        if (mit != min_allowed_seq_by_target_.end() && capture.capture_seq < mit->second) {
+            result.superseded = true;
+            result.error_message = "Recovery capture invalidated by newer save or discard operation.";
+            return result;
+        }
         uint64_t& max_sub = highest_submitted_seq_by_target_[target_key];
         max_sub = (std::max)(max_sub, capture.capture_seq);
         if (capture.capture_seq < max_sub) {
@@ -847,6 +890,14 @@ AutosaveWriteResult ProjectAutosaveEngine::commit_capture_blocking(const Autosav
 
         {
             std::lock_guard<std::mutex> flock(fence_mutex_);
+            const auto mit = min_allowed_seq_by_target_.find(target_key);
+            if (mit != min_allowed_seq_by_target_.end() && capture.capture_seq < mit->second) {
+                std::error_code rm_ec;
+                std::filesystem::remove(temp_path, rm_ec);
+                result.superseded = true;
+                result.error_message = "Older recovery write aborted after save or discard invalidation.";
+                return result;
+            }
             const auto sit = highest_submitted_seq_by_target_.find(target_key);
             if (sit != highest_submitted_seq_by_target_.end() && capture.capture_seq < sit->second) {
                 std::error_code rm_ec;
@@ -922,6 +973,177 @@ void ProjectAutosaveEngine::reset_session_tracking() {
     last_committed_target_.clear();
     last_committed_revision_ = 0;
     last_committed_project_sha256_.clear();
+}
+
+RecoveryCleanupResult ProjectAutosaveEngine::discard_recovery_file(
+    const std::filesystem::path& recovery_file_path) {
+    RecoveryCleanupResult out;
+    if (recovery_file_path.empty()) {
+        return out;
+    }
+
+    const std::string target_key = normalize_path_key(recovery_file_path);
+    const uint64_t fence_seq = allocate_capture_sequence();
+
+    {
+        std::lock_guard<std::mutex> commit_lock(commit_mutex_);
+        {
+            std::lock_guard<std::mutex> flock(fence_mutex_);
+            uint64_t& min_seq = min_allowed_seq_by_target_[target_key];
+            min_seq = (std::max)(min_seq, fence_seq);
+        }
+
+        std::error_code ec;
+        if (std::filesystem::exists(recovery_file_path, ec) && !ec) {
+            if (!std::filesystem::is_regular_file(recovery_file_path, ec) || ec) {
+                out.succeeded = false;
+                out.error_message = "Recovery path is not a regular file.";
+                return out;
+            }
+            if (!std::filesystem::remove(recovery_file_path, ec) || ec) {
+                out.succeeded = false;
+                out.error_message = "Failed to remove recovery file from disk.";
+                return out;
+            }
+            out.removed_count = 1;
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (normalize_path_key(last_committed_target_) == target_key) {
+            last_committed_project_id_.clear();
+            last_committed_target_.clear();
+            last_committed_revision_ = 0;
+            last_committed_project_sha256_.clear();
+        }
+        if (normalize_path_key(in_flight_target_) == target_key) {
+            pending_reschedule_ = false;
+        }
+    }
+    return out;
+}
+
+RecoveryCleanupResult ProjectAutosaveEngine::discard_for_project(
+    const std::string& project_id,
+    const std::filesystem::path& project_file_path) {
+    RecoveryCleanupResult total;
+    std::vector<std::filesystem::path> candidates;
+    const std::filesystem::path rec_dir_copy = recovery_dir();
+    if (!project_id.empty()) {
+        candidates.push_back(RecoveryInspector::untitled_recovery_path_for(rec_dir_copy, project_id));
+    }
+    if (!project_file_path.empty()) {
+        candidates.push_back(RecoveryInspector::named_recovery_path_for(project_file_path));
+    }
+
+    for (const auto& candidate : candidates) {
+        if (candidate.empty()) {
+            continue;
+        }
+        const std::string key = normalize_path_key(candidate);
+        const uint64_t fence_seq = allocate_capture_sequence();
+
+        std::lock_guard<std::mutex> commit_lock(commit_mutex_);
+        {
+            std::lock_guard<std::mutex> flock(fence_mutex_);
+            uint64_t& min_seq = min_allowed_seq_by_target_[key];
+            min_seq = (std::max)(min_seq, fence_seq);
+        }
+
+        std::error_code ec;
+        if (std::filesystem::exists(candidate, ec) && !ec &&
+            std::filesystem::is_regular_file(candidate, ec) && !ec) {
+            // For a shared/named file path, only remove if it belongs to this project_id (or if corrupt/owned).
+            bool should_remove = true;
+            if (!project_id.empty() && !project_file_path.empty() &&
+                candidate == RecoveryInspector::named_recovery_path_for(project_file_path)) {
+                const ParsedRecoveryEnvelope parsed_env = parse_and_validate_recovery_file(candidate);
+                if (!parsed_env.info.project_id.empty() && parsed_env.info.project_id != project_id) {
+                    should_remove = false;
+                    ++total.preserved_count;
+                }
+            }
+            if (should_remove) {
+                if (!std::filesystem::remove(candidate, ec) || ec) {
+                    total.succeeded = false;
+                    total.error_message = "Failed to discard project recovery snapshot.";
+                } else {
+                    ++total.removed_count;
+                }
+            }
+        }
+    }
+
+    reset_session_tracking();
+    return total;
+}
+
+RecoveryCleanupResult ProjectAutosaveEngine::cleanup_after_save(
+    const std::string& project_id,
+    const std::filesystem::path& saved_path,
+    const std::filesystem::path& previous_path,
+    uint64_t saved_revision) {
+    RecoveryCleanupResult total;
+    std::vector<std::filesystem::path> candidates;
+    const std::filesystem::path rec_dir_copy = recovery_dir();
+
+    if (!saved_path.empty()) {
+        candidates.push_back(RecoveryInspector::named_recovery_path_for(saved_path));
+    }
+    if (!project_id.empty()) {
+        candidates.push_back(RecoveryInspector::untitled_recovery_path_for(rec_dir_copy, project_id));
+    }
+    if (!previous_path.empty() && !same_project_path_or_empty(previous_path, saved_path)) {
+        candidates.push_back(RecoveryInspector::named_recovery_path_for(previous_path));
+    }
+
+    for (const auto& candidate : candidates) {
+        if (candidate.empty()) {
+            continue;
+        }
+        const std::string key = normalize_path_key(candidate);
+        const uint64_t fence_seq = allocate_capture_sequence();
+
+        std::lock_guard<std::mutex> commit_lock(commit_mutex_);
+        {
+            std::lock_guard<std::mutex> flock(fence_mutex_);
+            uint64_t& min_seq = min_allowed_seq_by_target_[key];
+            min_seq = (std::max)(min_seq, fence_seq);
+        }
+
+        std::error_code ec;
+        if (!std::filesystem::exists(candidate, ec) || ec ||
+            !std::filesystem::is_regular_file(candidate, ec) || ec) {
+            continue;
+        }
+
+        const ParsedRecoveryEnvelope parsed_env = parse_and_validate_recovery_file(candidate);
+        if (parsed_env.info.status != RecoveryStatus::Valid) {
+            ++total.preserved_count;
+            continue;
+        }
+        if (!project_id.empty() && parsed_env.info.project_id != project_id) {
+            // Do not delete recovery records belonging to another project ID.
+            ++total.preserved_count;
+            continue;
+        }
+        if (parsed_env.info.snapshot_revision > saved_revision) {
+            // Preserve newer recovery snapshot containing unsaved edits not included in this save.
+            ++total.preserved_count;
+            continue;
+        }
+
+        if (!std::filesystem::remove(candidate, ec) || ec) {
+            total.succeeded = false;
+            total.error_message = "Failed to remove obsolete recovery snapshot after save.";
+        } else {
+            ++total.removed_count;
+        }
+    }
+
+    reset_session_tracking();
+    return total;
 }
 
 void ProjectAutosaveEngine::shutdown() {

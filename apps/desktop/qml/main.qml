@@ -13,14 +13,17 @@ ApplicationWindow {
 
     readonly property bool hasLiveTimeline: (typeof timelineModel !== "undefined" && timelineModel !== null)
     readonly property bool hasLivePlayback: (typeof playbackService !== "undefined" && playbackService !== null)
+    readonly property bool hasLiveAutosave: (typeof autosaveService !== "undefined" && autosaveService !== null)
 
     property string pendingAction: ""
     property string pendingOpenUrl: ""
+    property string pendingRecoveryOpenUrl: ""
     property bool awaitingOpenDialog: false
     property bool awaitingSaveAs: false
     property bool actionInFlight: false
     property bool closeApproved: false
     property bool handlingDialogDecision: false
+    property bool handlingRecoveryDecision: false
     property bool suppressOpenReject: false
     property bool suppressSaveAsReject: false
     property string dialogErrorMessage: ""
@@ -32,7 +35,149 @@ ApplicationWindow {
                                                     actionInFlight ||
                                                     unsavedChangesDialog.visible ||
                                                     openProjectDialog.visible ||
-                                                    saveProjectAsDialog.visible
+                                                    saveProjectAsDialog.visible ||
+                                                    recoveryDialog.visible
+
+    Component.onCompleted: {
+        if (root.hasLiveAutosave) {
+            Qt.callLater(checkStartupRecovery)
+        }
+    }
+
+    function checkStartupRecovery() {
+        if (!root.hasLiveAutosave || root.hasPendingLifecycleFlow) {
+            return
+        }
+        const records = autosaveService.discoverStartupRecovery()
+        if (!records || records.length === 0) {
+            return
+        }
+        pendingRecoveryOpenUrl = ""
+        recoveryDialog.openWithRecords(records, "startup", "")
+    }
+
+    function performNormalOpen(openUrl) {
+        if (!root.hasLiveTimeline || !openUrl || openUrl === "") {
+            return false
+        }
+        if (timelineModel.openProject(openUrl)) {
+            lastLifecycleErrorMessage = ""
+            toolbar.showFeedback(qsTr("Project opened."), false)
+            return true
+        }
+        const err = timelineModel.lastProjectError()
+        showLifecycleError(err !== "" ? err : qsTr("Failed to open project file."))
+        return false
+    }
+
+    function handleRecoveryRestore(record) {
+        if (!root.hasLiveTimeline || !record) {
+            return
+        }
+        if (String(record.status || "") !== "valid" || !record.isSafeToRestore) {
+            recoveryDialog.errorMessage = qsTr("This recovery snapshot cannot be safely restored.")
+            return
+        }
+        recoveryDialog.busy = true
+        const expectedPath = root.pendingRecoveryOpenUrl !== ""
+            ? root.pendingRecoveryOpenUrl
+            : String(record.originalProjectPath || "")
+        const ok = timelineModel.restoreRecoveredProject(String(record.recoveryFilePath || ""), expectedPath)
+        recoveryDialog.busy = false
+        if (ok) {
+            root.handlingRecoveryDecision = true
+            recoveryDialog.records = []
+            recoveryDialog.close()
+            root.handlingRecoveryDecision = false
+            root.pendingRecoveryOpenUrl = ""
+            lastLifecycleErrorMessage = ""
+            toolbar.showFeedback(qsTr("Recovered project restored. Save when ready to update your project file."), false)
+        } else {
+            const err = timelineModel.lastProjectError()
+            recoveryDialog.errorMessage = (err !== "")
+                ? err
+                : qsTr("Failed to restore recovery snapshot.")
+            showLifecycleError(recoveryDialog.errorMessage)
+        }
+    }
+
+    function handleRecoveryDiscard(record) {
+        if (!root.hasLiveAutosave || !record) {
+            return
+        }
+        recoveryDialog.busy = true
+        const res = autosaveService.discardRecoveryRecord(String(record.recoveryFilePath || ""))
+        recoveryDialog.busy = false
+        if (!res || !res.ok) {
+            recoveryDialog.errorMessage = (res && res.error && res.error !== "")
+                ? res.error
+                : qsTr("Could not discard the recovery file.")
+            showLifecycleError(recoveryDialog.errorMessage)
+            return
+        }
+
+        const mode = recoveryDialog.dialogMode
+        const openTarget = root.pendingRecoveryOpenUrl !== ""
+            ? root.pendingRecoveryOpenUrl
+            : String(record.originalProjectPath || "")
+        if (mode === "open") {
+            root.handlingRecoveryDecision = true
+            recoveryDialog.records = []
+            recoveryDialog.close()
+            root.handlingRecoveryDecision = false
+            root.pendingRecoveryOpenUrl = ""
+            toolbar.showFeedback(qsTr("Recovery snapshot discarded."), false)
+            if (openTarget !== "") {
+                root.performNormalOpen(openTarget)
+            }
+            return
+        }
+
+        const removedPath = String(record.recoveryFilePath || "")
+        const nextList = []
+        const curList = recoveryDialog.records ? recoveryDialog.records : []
+        for (let i = 0; i < curList.length; ++i) {
+            if (String(curList[i].recoveryFilePath || "") !== removedPath) {
+                nextList.push(curList[i])
+            }
+        }
+        if (nextList.length === 0) {
+            root.handlingRecoveryDecision = true
+            recoveryDialog.records = []
+            recoveryDialog.close()
+            root.handlingRecoveryDecision = false
+            toolbar.showFeedback(qsTr("Recovery snapshot discarded."), false)
+        } else {
+            const nextIdx = Math.min(recoveryDialog.selectedIndex, nextList.length - 1)
+            recoveryDialog.records = nextList
+            recoveryDialog.selectedIndex = Math.max(0, nextIdx)
+            recoveryDialog.errorMessage = ""
+            recoveryDialog.focusPrimaryAction()
+            toolbar.showFeedback(qsTr("Discarded selected recovery snapshot."), false)
+        }
+    }
+
+    function handleRecoveryOpenOriginal(record) {
+        const targetPath = (root.pendingRecoveryOpenUrl !== "")
+            ? root.pendingRecoveryOpenUrl
+            : (record ? String(record.originalProjectPath || "") : "")
+        root.handlingRecoveryDecision = true
+        recoveryDialog.close()
+        root.handlingRecoveryDecision = false
+        root.pendingRecoveryOpenUrl = ""
+        if (targetPath !== "") {
+            root.performNormalOpen(targetPath)
+        } else {
+            showLifecycleError(qsTr("The original project file location could not be found."))
+        }
+    }
+
+    function handleRecoveryNotNow() {
+        root.handlingRecoveryDecision = true
+        recoveryDialog.close()
+        root.handlingRecoveryDecision = false
+        root.pendingRecoveryOpenUrl = ""
+    }
 
     function resetLifecycleState() {
         pendingAction = ""
@@ -65,14 +210,15 @@ ApplicationWindow {
             return false
         }
         if (action === "open") {
-            if (timelineModel.openProject(openUrl)) {
-                lastLifecycleErrorMessage = ""
-                toolbar.showFeedback(qsTr("Project opened."), false)
-                return true
+            if (root.hasLiveAutosave) {
+                const rec = autosaveService.inspectProjectRecovery(openUrl)
+                if (rec && rec.status && rec.status !== "missing") {
+                    pendingRecoveryOpenUrl = openUrl
+                    recoveryDialog.openWithRecords([rec], "open", openUrl)
+                    return true
+                }
             }
-            const err = timelineModel.lastProjectError()
-            showLifecycleError(err !== "" ? err : qsTr("Failed to open project file."))
-            return false
+            return performNormalOpen(openUrl)
         }
         if (action === "close") {
             root.closeApproved = true
@@ -116,7 +262,7 @@ ApplicationWindow {
         if (!root.hasLiveTimeline || !urlStr || urlStr === "") {
             return
         }
-        if (pendingAction !== "" || awaitingSaveAs || actionInFlight || unsavedChangesDialog.visible) {
+        if (pendingAction !== "" || awaitingSaveAs || actionInFlight || unsavedChangesDialog.visible || recoveryDialog.visible) {
             return
         }
         lastLifecycleErrorMessage = ""
@@ -276,6 +422,11 @@ ApplicationWindow {
         if (actionInFlight || pendingAction === "") {
             return
         }
+        if (root.hasLiveTimeline && root.hasLiveAutosave) {
+            const projId = timelineModel.currentProjectId()
+            const projPath = timelineModel.projectFilePath
+            autosaveService.discardActiveProjectChanges(projId, projPath)
+        }
         handlingDialogDecision = true
         if (unsavedChangesDialog.visible) {
             unsavedChangesDialog.close()
@@ -359,6 +510,22 @@ ApplicationWindow {
         nameFilters: [qsTr("AVE Projects (*.aveproj)"), qsTr("All files (*)")]
         onAccepted: root.handleSaveProjectAsSelected(selectedFile ? selectedFile.toString() : "")
         onRejected: root.handleSaveProjectAsCancelled()
+    }
+
+    RecoveryDialog {
+        id: recoveryDialog
+        objectName: "recoveryDialog"
+        onRestoreRequested: (record) => root.handleRecoveryRestore(record)
+        onDiscardRequested: (record) => root.handleRecoveryDiscard(record)
+        onOpenOriginalRequested: (record) => root.handleRecoveryOpenOriginal(record)
+        onNotNowRequested: () => root.handleRecoveryNotNow()
+        onClosed: {
+            if (!root.handlingRecoveryDecision) {
+                root.pendingRecoveryOpenUrl = ""
+                errorMessage = ""
+                busy = false
+            }
+        }
     }
 
     Dialog {

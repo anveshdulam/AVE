@@ -182,7 +182,7 @@ public:
     DesktopShellRuntime(const DesktopShellRuntime&) = delete;
     DesktopShellRuntime& operator=(const DesktopShellRuntime&) = delete;
 
-    void initialize() {
+    void initialize(bool verify_qml_only = false) {
         if (initialized_) {
             return;
         }
@@ -223,7 +223,15 @@ public:
             *session_, frame_hub_, snapshot_store_);
         ai_studio_service_ = std::make_unique<ave::desktop::AiStudioService>(
             *project_, nullptr, snapshot_store_, snapshot_coordinator_.get());
-        autosave_service_ = std::make_unique<ave::desktop::AutosaveService>(*project_);
+        if (verify_qml_only) {
+            verify_recovery_dir_ = std::filesystem::temp_directory_path() /
+                ("ave_qml_verify_recovery_" + std::to_string(QCoreApplication::applicationPid()));
+            autosave_service_ = std::make_unique<ave::desktop::AutosaveService>(
+                *project_, verify_recovery_dir_);
+            autosave_service_->setRecentProjectsTrackingEnabled(false);
+        } else {
+            autosave_service_ = std::make_unique<ave::desktop::AutosaveService>(*project_);
+        }
 
         QObject::connect(
             media_pool_model_.get(), &ave::desktop::MediaPoolModel::projectMediaMutated,
@@ -244,6 +252,12 @@ public:
         QObject::connect(
             timeline_model_.get(), &ave::desktop::TimelineModel::projectReloaded,
             autosave_service_.get(), &ave::desktop::AutosaveService::onProjectReloaded);
+        QObject::connect(
+            timeline_model_.get(), &ave::desktop::TimelineModel::projectOpened,
+            autosave_service_.get(), &ave::desktop::AutosaveService::onProjectOpened);
+        QObject::connect(
+            timeline_model_.get(), &ave::desktop::TimelineModel::projectSaved,
+            autosave_service_.get(), &ave::desktop::AutosaveService::onProjectSaved);
         QObject::connect(
             ai_studio_service_.get(), &ave::desktop::AiStudioService::proposalApplied,
             playback_service_.get(), &ave::desktop::PlaybackService::syncFromTimeline);
@@ -271,6 +285,9 @@ public:
         engine_->rootContext()->setContextProperty(
             QStringLiteral("aiStudioService"),
             ai_studio_service_.get());
+        engine_->rootContext()->setContextProperty(
+            QStringLiteral("autosaveService"),
+            autosave_service_.get());
         initialized_ = true;
     }
 
@@ -323,6 +340,11 @@ public:
         vulkan_device_.reset();
         snapshot_store_.reset();
         project_.reset();
+        if (!verify_recovery_dir_.empty()) {
+            std::error_code ec;
+            std::filesystem::remove_all(verify_recovery_dir_, ec);
+            verify_recovery_dir_.clear();
+        }
         initialized_ = false;
     }
 
@@ -333,6 +355,7 @@ public:
 
 private:
     bool initialized_{false};
+    std::filesystem::path verify_recovery_dir_{};
     std::unique_ptr<ave::Project> project_;
     std::shared_ptr<ave::PlaybackSnapshotStore> snapshot_store_;
     std::shared_ptr<ave::VulkanDevice> vulkan_device_;
@@ -392,7 +415,7 @@ int main(int argc, char* argv[]) {
     int exit_code = 0;
     {
         DesktopShellRuntime runtime;
-        runtime.initialize();
+        runtime.initialize(verify_qml_only);
 
         if (!verify_qml_only) {
             print_system_status(runtime.vulkan_device(), runtime.project(), runtime.playback_vm());

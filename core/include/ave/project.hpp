@@ -56,7 +56,9 @@ public:
     CommandHistory& command_history_mut() noexcept { return command_history_; }
 
     [[nodiscard]] bool is_dirty() const noexcept;
+    [[nodiscard]] bool is_restored_from_recovery() const noexcept { return restored_from_recovery_; }
     void mark_clean() noexcept;
+    void mark_dirty_from_recovery(uint64_t recovered_revision = 1) noexcept;
     [[nodiscard]] uint64_t semantic_mutation_revision() const noexcept;
     [[nodiscard]] uint64_t saved_mutation_revision() const noexcept { return saved_mutation_revision_; }
 
@@ -104,6 +106,8 @@ private:
     std::string clean_name_{"Untitled Project"};
     uint64_t metadata_revision_{0};
     uint64_t saved_mutation_revision_{0};
+    uint64_t recovery_revision_offset_{0};
+    bool restored_from_recovery_{false};
     uint64_t clean_media_pool_revision_{0};
     uint64_t clean_media_pool_digest_{0};
     CommandHistory::ListenerId internal_history_listener_id_{0};

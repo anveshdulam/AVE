@@ -164,7 +164,9 @@ public:
     Q_INVOKABLE bool redo();
     Q_INVOKABLE bool newProject(const QString& name = QStringLiteral("Untitled Project"));
     Q_INVOKABLE bool openProject(const QString& filePath);
+    Q_INVOKABLE bool restoreRecoveredProject(const QString& recoveryFilePath, const QString& expectedProjectPath = {});
     Q_INVOKABLE bool saveProject(const QString& filePath = {});
+    Q_INVOKABLE QString currentProjectId() const;
     Q_INVOKABLE QString lastProjectError() const;
     Q_INVOKABLE bool exportOtio(const QString& filePath);
     Q_INVOKABLE int  relinkOfflineMedia(const QString& searchDirectory);
@@ -184,6 +186,11 @@ signals:
     void historyChanged();
     void projectStateChanged();
     void projectReloaded();
+    void projectOpened(const QString& filePath);
+    void projectSaved(const QString& savedFilePath,
+                      const QString& previousFilePath,
+                      quint64 savedRevision,
+                      const QString& projectId);
 
 private:
     void bind_project_listener();

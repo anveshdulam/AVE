@@ -29,6 +29,7 @@
 #include <limits>
 #include <memory>
 #include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1587,6 +1588,456 @@ TEST(Phase10ServicesPropertyTest, M13C1AutosaveServiceTimerAndLifecycleIntegrati
     autosave.shutdown();
     EXPECT_FALSE(autosave.isRunning());
     coordinator.unbind();
+}
+
+TEST(Phase10ServicesPropertyTest, M13C2StartupRecoveryOpenDiscardAndLifecycleQML) {
+    ScopedTempDir tmp("ave_m13c2_qml");
+    const std::filesystem::path rec_dir = tmp.path / "recovery";
+    const std::filesystem::path ini_path = tmp.path / "recent_projects.ini";
+    std::filesystem::create_directories(rec_dir);
+
+    auto read_file_str = [](const std::filesystem::path& p) -> std::string {
+        std::ifstream ifs(p, std::ios::in | std::ios::binary);
+        std::ostringstream ss;
+        ss << ifs.rdbuf();
+        return ss.str();
+    };
+
+    auto commit_dirty_snapshot = [&rec_dir](const ave::Project& p) -> std::filesystem::path {
+        ave::ProjectAutosaveEngine tmp_eng(rec_dir);
+        const auto cap = ave::ProjectAutosaveEngine::capture_snapshot_if_dirty(
+            p, rec_dir, tmp_eng.allocate_capture_sequence());
+        EXPECT_TRUE(cap.has_value());
+        const auto res = tmp_eng.commit_capture_blocking(*cap);
+        EXPECT_TRUE(res.succeeded);
+        tmp_eng.shutdown();
+        return res.recovery_file_path;
+    };
+
+    // --- Phase A: Clean startup (no recovery snapshots present -> dialog stays hidden) ---
+    {
+        auto project = std::make_unique<ave::Project>("Clean Startup");
+        auto snapshot_store = std::make_shared<ave::PlaybackSnapshotStore>(
+            project->timeline(), project->media_pool());
+        auto frame_hub = std::make_shared<ave::FramePresentationHub>();
+        auto media_cache = std::make_shared<ave::MediaCache>(tmp.path / "cache_a");
+        auto import_queue = std::make_shared<ave::MediaImportQueue>();
+        auto session = std::make_unique<ave::PlaybackSession>(
+            snapshot_store, ave::PlaybackSessionConfig{}, frame_hub);
+        auto coordinator = std::make_unique<ave::ProjectSnapshotCoordinator>(
+            *project, snapshot_store, session.get());
+        auto media_pool_model = std::make_unique<ave::desktop::MediaPoolModel>(
+            *project, import_queue, nullptr, media_cache);
+        auto timeline_model = std::make_unique<ave::desktop::TimelineModel>(
+            *project, nullptr, coordinator.get(), media_cache);
+        auto inspector_service = std::make_unique<ave::desktop::InspectorService>(
+            *project, *timeline_model);
+        auto playback_service = std::make_unique<ave::desktop::PlaybackService>(
+            *session, frame_hub, snapshot_store);
+        auto ai_studio_service = std::make_unique<ave::desktop::AiStudioService>(
+            *project, nullptr, snapshot_store, coordinator.get());
+        auto autosave_service = std::make_unique<ave::desktop::AutosaveService>(
+            *project, rec_dir, 25);
+        autosave_service->setRecentProjectsIniPath(ini_path);
+        autosave_service->start();
+
+        auto engine = std::make_unique<QQmlApplicationEngine>();
+        QList<QQmlError> qml_warnings;
+        QObject::connect(engine.get(), &QQmlEngine::warnings, engine.get(),
+                         [&qml_warnings](const QList<QQmlError>& warnings) { qml_warnings.append(warnings); });
+        engine->addImageProvider(QStringLiteral("aveframe"), new ave::desktop::LiveFrameImageProvider(frame_hub));
+        engine->rootContext()->setContextProperty(QStringLiteral("mediaPoolModel"), media_pool_model.get());
+        engine->rootContext()->setContextProperty(QStringLiteral("timelineModel"), timeline_model.get());
+        engine->rootContext()->setContextProperty(QStringLiteral("inspectorService"), inspector_service.get());
+        engine->rootContext()->setContextProperty(QStringLiteral("playbackService"), playback_service.get());
+        engine->rootContext()->setContextProperty(QStringLiteral("aiStudioService"), ai_studio_service.get());
+        engine->rootContext()->setContextProperty(QStringLiteral("autosaveService"), autosave_service.get());
+        const QString main_qml_file = QStringLiteral(AVE_DESKTOP_QML_DIR) + QStringLiteral("/main.qml");
+        engine->load(QUrl::fromLocalFile(main_qml_file));
+        ASSERT_FALSE(engine->rootObjects().isEmpty()) << "Failed to load " << main_qml_file.toStdString();
+
+        auto* root_win = qobject_cast<QQuickWindow*>(engine->rootObjects().constFirst());
+        ASSERT_NE(root_win, nullptr);
+        pump_events_until([]() { return false; }, 60);
+
+        QObject* rec_dialog = find_qml_descendant(root_win, "recoveryDialog");
+        ASSERT_NE(rec_dialog, nullptr);
+        EXPECT_FALSE(rec_dialog->property("visible").toBool());
+        EXPECT_TRUE(qml_warnings.isEmpty());
+
+        engine.reset();
+        autosave_service->shutdown();
+        playback_service->shutdown();
+        media_pool_model->shutdown();
+        ai_studio_service->shutdown();
+        session->shutdown();
+        frame_hub->shutdown();
+        coordinator->unbind();
+    }
+
+    // --- Phase B: Multi-session startup + Not Now + Restore + Corrupt + Stale + File->Open + M1.3B Lifecycle ---
+    // Seed:
+    //  1) Two valid untitled recovery records (Multi 1 & Multi 2)
+    //  2) One valid recent named recovery record (Named Crashed)
+    //  3) One corrupt recovery record in recovery_dir
+    ave::Project untitled_one("Recovered Session One");
+    untitled_one.media_pool_mut().register_asset(
+        make_synthetic_av_asset("asset-rec-1", "Clip One", "clip1.mp4", ave::Rational{5, 1}));
+    ASSERT_EQ(untitled_one.execute_command(std::make_unique<ave::InsertClipCommand>(
+        untitled_one.timeline().video_tracks()[0].id(),
+        ave::TimelineItem("rec-item-1", "ref-1", "asset-rec-1", "Clip One",
+                          ave::Rational{0, 1}, ave::Rational{3, 1}, ave::Rational{0, 1}))).status,
+        ave::CommandStatus::Success);
+    const std::filesystem::path untitled_one_sidecar = commit_dirty_snapshot(untitled_one);
+
+    ave::Project untitled_two("Recovered Session Two");
+    untitled_two.media_pool_mut().register_asset(
+        make_synthetic_av_asset("asset-rec-2", "Clip Two", "clip2.mp4", ave::Rational{6, 1}));
+    ASSERT_EQ(untitled_two.execute_command(std::make_unique<ave::InsertClipCommand>(
+        untitled_two.timeline().video_tracks()[0].id(),
+        ave::TimelineItem("rec-item-2", "ref-2", "asset-rec-2", "Clip Two",
+                          ave::Rational{0, 1}, ave::Rational{4, 1}, ave::Rational{0, 1}))).status,
+        ave::CommandStatus::Success);
+    const std::filesystem::path untitled_two_sidecar = commit_dirty_snapshot(untitled_two);
+
+    const std::filesystem::path corrupt_startup_sidecar = rec_dir / "damaged_startup.autosave";
+    {
+        std::ofstream ofs(corrupt_startup_sidecar, std::ios::out | std::ios::binary | std::ios::trunc);
+        ofs << "{\"recovery_format_version\":1,\"project_id\":\"dmg-1\",\"project_name\":\"Damaged Project\"}";
+    }
+
+    // Also create a clean saved named project with a valid sidecar for File->Open recovery testing
+    const std::filesystem::path open_proj_path = tmp.path / "open_with_rec.aveproj";
+    const QString open_proj_url = QUrl::fromLocalFile(QString::fromStdWString(open_proj_path.wstring())).toString();
+    ave::Project open_base("Open Base Saved");
+    ASSERT_TRUE(open_base.save(open_proj_path));
+    const std::string open_disk_bytes_before = read_file_str(open_proj_path);
+
+    open_base.set_name("Open Unsaved Autosave");
+    open_base.media_pool_mut().register_asset(
+        make_synthetic_av_asset("asset-open-rec", "Open Clip", "open.mp4", ave::Rational{4, 1}));
+    ASSERT_EQ(open_base.execute_command(std::make_unique<ave::InsertClipCommand>(
+        open_base.timeline().video_tracks()[0].id(),
+        ave::TimelineItem("open-rec-clip", "ref-o", "asset-open-rec", "Recovered Open Clip",
+                          ave::Rational{0, 1}, ave::Rational{2, 1}, ave::Rational{0, 1}))).status,
+        ave::CommandStatus::Success);
+    const std::filesystem::path open_proj_sidecar = commit_dirty_snapshot(open_base);
+
+    // Create a Stale project + sidecar for stale UI testing
+    const std::filesystem::path stale_proj_path = tmp.path / "stale_named.aveproj";
+    const QString stale_proj_url = QUrl::fromLocalFile(QString::fromStdWString(stale_proj_path.wstring())).toString();
+    ave::Project stale_proj("Stale Disk Project");
+    ASSERT_TRUE(stale_proj.save(stale_proj_path));
+    stale_proj.set_name("Stale Older Autosave");
+    const std::filesystem::path stale_proj_sidecar = commit_dirty_snapshot(stale_proj);
+    stale_proj.set_name("Stale Newer On Disk");
+    ASSERT_TRUE(stale_proj.save(stale_proj_path));
+
+    // Create an unrelated project's recovery snapshot that MUST NEVER be deleted by other projects
+    ave::Project unrelated_proj("Unrelated Keep Me");
+    unrelated_proj.set_name("Unrelated Keep Me Dirty");
+    const std::filesystem::path unrelated_sidecar = commit_dirty_snapshot(unrelated_proj);
+
+    {
+        auto project = std::make_unique<ave::Project>("Active Session");
+        auto snapshot_store = std::make_shared<ave::PlaybackSnapshotStore>(
+            project->timeline(), project->media_pool());
+        auto frame_hub = std::make_shared<ave::FramePresentationHub>();
+        auto media_cache = std::make_shared<ave::MediaCache>(tmp.path / "cache_b");
+        auto import_queue = std::make_shared<ave::MediaImportQueue>();
+        auto session = std::make_unique<ave::PlaybackSession>(
+            snapshot_store, ave::PlaybackSessionConfig{}, frame_hub);
+        auto coordinator = std::make_unique<ave::ProjectSnapshotCoordinator>(
+            *project, snapshot_store, session.get());
+        auto media_pool_model = std::make_unique<ave::desktop::MediaPoolModel>(
+            *project, import_queue, nullptr, media_cache);
+        auto timeline_model = std::make_unique<ave::desktop::TimelineModel>(
+            *project, nullptr, coordinator.get(), media_cache);
+        auto inspector_service = std::make_unique<ave::desktop::InspectorService>(
+            *project, *timeline_model);
+        auto playback_service = std::make_unique<ave::desktop::PlaybackService>(
+            *session, frame_hub, snapshot_store);
+        auto ai_studio_service = std::make_unique<ave::desktop::AiStudioService>(
+            *project, nullptr, snapshot_store, coordinator.get());
+        auto autosave_service = std::make_unique<ave::desktop::AutosaveService>(
+            *project, rec_dir, 25);
+        autosave_service->setRecentProjectsIniPath(ini_path);
+
+        QObject::connect(media_pool_model.get(), &ave::desktop::MediaPoolModel::projectMediaMutated,
+                         media_pool_model.get(), [coord = coordinator.get()]() {
+                             if (coord) {
+                                 coord->notify_media_mutated();
+                             }
+                         });
+        QObject::connect(timeline_model.get(), &ave::desktop::TimelineModel::projectReloaded,
+                         media_pool_model.get(), &ave::desktop::MediaPoolModel::reloadFromProject);
+        QObject::connect(timeline_model.get(), &ave::desktop::TimelineModel::projectStateChanged,
+                         autosave_service.get(), &ave::desktop::AutosaveService::onProjectStateChanged);
+        QObject::connect(timeline_model.get(), &ave::desktop::TimelineModel::projectReloaded,
+                         autosave_service.get(), &ave::desktop::AutosaveService::onProjectReloaded);
+        QObject::connect(timeline_model.get(), &ave::desktop::TimelineModel::projectOpened,
+                         autosave_service.get(), &ave::desktop::AutosaveService::onProjectOpened);
+        QObject::connect(timeline_model.get(), &ave::desktop::TimelineModel::projectSaved,
+                         autosave_service.get(), &ave::desktop::AutosaveService::onProjectSaved);
+        autosave_service->start();
+
+        auto engine = std::make_unique<QQmlApplicationEngine>();
+        QList<QQmlError> qml_warnings;
+        QObject::connect(engine.get(), &QQmlEngine::warnings, engine.get(),
+                         [&qml_warnings](const QList<QQmlError>& warnings) { qml_warnings.append(warnings); });
+        engine->addImageProvider(QStringLiteral("aveframe"), new ave::desktop::LiveFrameImageProvider(frame_hub));
+        engine->rootContext()->setContextProperty(QStringLiteral("mediaPoolModel"), media_pool_model.get());
+        engine->rootContext()->setContextProperty(QStringLiteral("timelineModel"), timeline_model.get());
+        engine->rootContext()->setContextProperty(QStringLiteral("inspectorService"), inspector_service.get());
+        engine->rootContext()->setContextProperty(QStringLiteral("playbackService"), playback_service.get());
+        engine->rootContext()->setContextProperty(QStringLiteral("aiStudioService"), ai_studio_service.get());
+        engine->rootContext()->setContextProperty(QStringLiteral("autosaveService"), autosave_service.get());
+        const QString main_qml_file = QStringLiteral(AVE_DESKTOP_QML_DIR) + QStringLiteral("/main.qml");
+        engine->load(QUrl::fromLocalFile(main_qml_file));
+        ASSERT_FALSE(engine->rootObjects().isEmpty()) << "Failed to load " << main_qml_file.toStdString();
+
+        auto* root_win = qobject_cast<QQuickWindow*>(engine->rootObjects().constFirst());
+        ASSERT_NE(root_win, nullptr);
+
+        QObject* rec_dialog = find_qml_descendant(root_win, "recoveryDialog");
+        QObject* rec_list = find_qml_descendant(root_win, "recoveryRecordList");
+        QObject* restore_btn = find_qml_descendant(root_win, "recoveryRestoreButton");
+        QObject* discard_btn = find_qml_descendant(root_win, "recoveryDiscardButton");
+        QObject* open_orig_btn = find_qml_descendant(root_win, "recoveryOpenOriginalButton");
+        QObject* not_now_btn = find_qml_descendant(root_win, "recoveryNotNowButton");
+        QObject* rec_status_text = find_qml_descendant(root_win, "recoveryStatusText");
+        QObject* rec_expl_text = find_qml_descendant(root_win, "recoveryExplanationText");
+        QObject* rec_safe_text = find_qml_descendant(root_win, "recoverySafeStatusText");
+        ASSERT_NE(rec_dialog, nullptr);
+        ASSERT_NE(rec_list, nullptr);
+        ASSERT_NE(restore_btn, nullptr);
+        ASSERT_NE(discard_btn, nullptr);
+        ASSERT_NE(open_orig_btn, nullptr);
+        ASSERT_NE(not_now_btn, nullptr);
+        ASSERT_NE(rec_status_text, nullptr);
+        ASSERT_NE(rec_expl_text, nullptr);
+        ASSERT_NE(rec_safe_text, nullptr);
+
+        auto click_item = [](QObject* btn) {
+            ASSERT_NE(btn, nullptr);
+            ASSERT_TRUE(QMetaObject::invokeMethod(btn, "click", Qt::DirectConnection));
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        };
+
+        // 1. Startup automatically shows RecoveryDialog with all discovered sessions (multi-record list)
+        pump_events_until([rec_dialog]() { return rec_dialog->property("visible").toBool(); }, 1000);
+        ASSERT_TRUE(rec_dialog->property("visible").toBool());
+        const QVariantList initial_records = rec_dialog->property("records").toList();
+        EXPECT_EQ(initial_records.size(), 4); // 2 valid multi + 1 valid unrelated + 1 corrupt
+        EXPECT_TRUE(rec_list->property("visible").toBool());
+        EXPECT_TRUE(restore_btn->property("visible").toBool());
+        EXPECT_FALSE(rec_expl_text->property("text").toString().isEmpty());
+        EXPECT_EQ(rec_safe_text->property("text").toString(), QStringLiteral("Safe to restore"));
+
+        // 2. Startup "Not Now" closes dialog without deleting ANY .autosave files
+        click_item(not_now_btn);
+        EXPECT_FALSE(rec_dialog->property("visible").toBool());
+        EXPECT_TRUE(std::filesystem::exists(untitled_one_sidecar));
+        EXPECT_TRUE(std::filesystem::exists(untitled_two_sidecar));
+        EXPECT_TRUE(std::filesystem::exists(corrupt_startup_sidecar));
+        EXPECT_TRUE(std::filesystem::exists(unrelated_sidecar));
+
+        // 3. Re-check startup recovery: verify Corrupt record disables/hides Restore and Discards cleanly
+        ASSERT_TRUE(QMetaObject::invokeMethod(root_win, "checkStartupRecovery", Qt::DirectConnection));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        ASSERT_TRUE(rec_dialog->property("visible").toBool());
+
+        const QVariantList recs_2 = rec_dialog->property("records").toList();
+        int corrupt_idx = -1;
+        for (int i = 0; i < recs_2.size(); ++i) {
+            const QVariantMap m = recs_2[i].toMap();
+            if (m.value(QStringLiteral("status")).toString() == QStringLiteral("corrupt")) {
+                corrupt_idx = i;
+                break;
+            }
+        }
+        ASSERT_GE(corrupt_idx, 0);
+        rec_dialog->setProperty("selectedIndex", corrupt_idx);
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        EXPECT_EQ(rec_status_text->property("text").toString(), QStringLiteral("Damaged"));
+        EXPECT_FALSE(restore_btn->property("visible").toBool());
+        EXPECT_FALSE(restore_btn->property("enabled").toBool());
+        click_item(discard_btn);
+        EXPECT_FALSE(std::filesystem::exists(corrupt_startup_sidecar));
+        EXPECT_TRUE(rec_dialog->property("visible").toBool()); // Other sessions remain for decision
+
+        // 4. Select Session One specifically from multiple valid records and click Restore
+        const QVariantList recs_after_corrupt = rec_dialog->property("records").toList();
+        int target_one_idx = -1;
+        int target_two_idx = -1;
+        for (int i = 0; i < recs_after_corrupt.size(); ++i) {
+            const QVariantMap m = recs_after_corrupt[i].toMap();
+            if (m.value(QStringLiteral("projectId")).toString() == QString::fromStdString(untitled_one.id())) {
+                target_one_idx = i;
+            } else if (m.value(QStringLiteral("projectId")).toString() == QString::fromStdString(untitled_two.id())) {
+                target_two_idx = i;
+            }
+        }
+        ASSERT_GE(target_one_idx, 0);
+        ASSERT_GE(target_two_idx, 0);
+
+        // First discard Session Two selectively, ensuring Session One & Unrelated stay untouched
+        rec_dialog->setProperty("selectedIndex", target_two_idx);
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        click_item(discard_btn);
+        EXPECT_FALSE(std::filesystem::exists(untitled_two_sidecar));
+        EXPECT_TRUE(std::filesystem::exists(untitled_one_sidecar));
+        EXPECT_TRUE(std::filesystem::exists(unrelated_sidecar));
+
+        // Now find Session One and Restore it!
+        const QVariantList recs_remaining = rec_dialog->property("records").toList();
+        target_one_idx = -1;
+        for (int i = 0; i < recs_remaining.size(); ++i) {
+            if (recs_remaining[i].toMap().value(QStringLiteral("projectId")).toString() ==
+                QString::fromStdString(untitled_one.id())) {
+                target_one_idx = i;
+                break;
+            }
+        }
+        ASSERT_GE(target_one_idx, 0);
+        rec_dialog->setProperty("selectedIndex", target_one_idx);
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        EXPECT_TRUE(restore_btn->property("visible").toBool());
+        click_item(restore_btn);
+        EXPECT_FALSE(rec_dialog->property("visible").toBool());
+        EXPECT_EQ(timeline_model->projectName(), QStringLiteral("Recovered Session One"));
+        EXPECT_TRUE(timeline_model->projectFilePath().isEmpty());
+        EXPECT_TRUE(timeline_model->isDirty());
+        EXPECT_TRUE(root_win->property("title").toString().contains(QStringLiteral(" *")));
+        ASSERT_NE(project->timeline().find_item("rec-item-1"), nullptr);
+
+        // Clean up active session via Save As so no leftover dirty prompt interferes
+        const std::filesystem::path restored_saved_path = tmp.path / "restored_u1.aveproj";
+        ASSERT_TRUE(timeline_model->saveProject(
+            QUrl::fromLocalFile(QString::fromStdWString(restored_saved_path.wstring())).toString()));
+        EXPECT_FALSE(timeline_model->isDirty());
+        EXPECT_FALSE(std::filesystem::exists(untitled_one_sidecar)); // Save cleaned untitled snapshot
+        EXPECT_TRUE(std::filesystem::exists(unrelated_sidecar));     // Unrelated snapshot preserved!
+
+        // 5. File->Open on named project with Valid recovery:
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            root_win, "beginOpenProjectPath", Qt::DirectConnection, Q_ARG(QVariant, open_proj_url)));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        ASSERT_TRUE(rec_dialog->property("visible").toBool());
+        EXPECT_EQ(rec_dialog->property("dialogMode").toString(), QStringLiteral("open"));
+        EXPECT_EQ(rec_status_text->property("text").toString(), QStringLiteral("Recoverable"));
+        EXPECT_TRUE(restore_btn->property("visible").toBool());
+        EXPECT_TRUE(open_orig_btn->property("visible").toBool());
+
+        // 5a. Cancel / Not Now aborts open & preserves sidecar and disk .aveproj
+        click_item(not_now_btn);
+        EXPECT_FALSE(rec_dialog->property("visible").toBool());
+        EXPECT_TRUE(std::filesystem::exists(open_proj_sidecar));
+        EXPECT_EQ(timeline_model->projectName(), QStringLiteral("Recovered Session One"));
+
+        // 5b. Open -> Open Original opens disk copy while preserving valid .autosave
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            root_win, "beginOpenProjectPath", Qt::DirectConnection, Q_ARG(QVariant, open_proj_url)));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        ASSERT_TRUE(rec_dialog->property("visible").toBool());
+        click_item(open_orig_btn);
+        EXPECT_FALSE(rec_dialog->property("visible").toBool());
+        EXPECT_EQ(timeline_model->projectName(), QStringLiteral("Open Base Saved"));
+        EXPECT_FALSE(timeline_model->isDirty());
+        EXPECT_EQ(project->timeline().video_tracks()[0].items().size(), 0u);
+        EXPECT_TRUE(std::filesystem::exists(open_proj_sidecar));
+
+        // 5c. Open -> Restore loads autosave, marks project dirty, and leaves original .aveproj UNTOUCHED on disk!
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            root_win, "beginOpenProjectPath", Qt::DirectConnection, Q_ARG(QVariant, open_proj_url)));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        ASSERT_TRUE(rec_dialog->property("visible").toBool());
+        click_item(restore_btn);
+        EXPECT_FALSE(rec_dialog->property("visible").toBool());
+        EXPECT_EQ(timeline_model->projectName(), QStringLiteral("Open Unsaved Autosave"));
+        EXPECT_TRUE(timeline_model->isDirty());
+        ASSERT_NE(project->timeline().find_item("open-rec-clip"), nullptr);
+        EXPECT_EQ(read_file_str(open_proj_path), open_disk_bytes_before);
+
+        // 5d. Failed Save preserves recovery snapshot AND keeps isDirty == true
+        const std::filesystem::path blocker_dir = tmp.path / "failed_save.aveproj.tmp";
+        const std::filesystem::path failed_save_path = tmp.path / "failed_save.aveproj";
+        std::filesystem::create_directories(blocker_dir);
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            root_win, "handleSaveProjectAsSelected", Qt::DirectConnection,
+            Q_ARG(QVariant, QUrl::fromLocalFile(QString::fromStdWString(failed_save_path.wstring())).toString())));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        EXPECT_TRUE(timeline_model->isDirty());
+        EXPECT_TRUE(std::filesystem::exists(open_proj_sidecar));
+
+        // 5e. Subsequent Save updates .aveproj and removes obsolete open_proj_sidecar while keeping unrelated_sidecar
+        QSignalSpy save_autosave_spy(autosave_service.get(), &ave::desktop::AutosaveService::autosaveSucceeded);
+        project->set_name("Edited After Restored Named");
+        pump_events_until([&save_autosave_spy]() { return save_autosave_spy.count() >= 1; }, 1500);
+        ASSERT_GE(save_autosave_spy.count(), 1);
+        ASSERT_TRUE(QMetaObject::invokeMethod(root_win, "requestSaveProject", Qt::DirectConnection));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        EXPECT_FALSE(timeline_model->isDirty());
+        EXPECT_FALSE(std::filesystem::exists(open_proj_sidecar));
+        EXPECT_TRUE(std::filesystem::exists(unrelated_sidecar));
+
+        // 6. Open stale project -> disables Restore, offers Open Original & Discard
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            root_win, "beginOpenProjectPath", Qt::DirectConnection, Q_ARG(QVariant, stale_proj_url)));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        ASSERT_TRUE(rec_dialog->property("visible").toBool());
+        EXPECT_EQ(rec_status_text->property("text").toString(), QStringLiteral("Outdated"));
+        EXPECT_FALSE(restore_btn->property("visible").toBool());
+        EXPECT_TRUE(open_orig_btn->property("visible").toBool());
+        click_item(discard_btn); // Discard stale -> deletes sidecar and opens original
+        EXPECT_FALSE(rec_dialog->property("visible").toBool());
+        EXPECT_FALSE(std::filesystem::exists(stale_proj_sidecar));
+        EXPECT_EQ(timeline_model->projectName(), QStringLiteral("Stale Newer On Disk"));
+        EXPECT_FALSE(timeline_model->isDirty());
+
+        // 7. Dirty project -> New/Close -> Cancel preserves .autosave; Don't Save discards .autosave!
+        project->set_name("Dirty Before Lifecycle Cancel");
+        QSignalSpy life_spy(autosave_service.get(), &ave::desktop::AutosaveService::autosaveSucceeded);
+        pump_events_until([&life_spy]() { return life_spy.count() >= 1; }, 1500);
+        ASSERT_GE(life_spy.count(), 1);
+        EXPECT_TRUE(std::filesystem::exists(stale_proj_sidecar));
+
+        QObject* unsaved_dialog = find_qml_descendant(root_win, "unsavedChangesDialog");
+        QObject* unsaved_cancel = find_qml_descendant(root_win, "unsavedCancelButton");
+        QObject* unsaved_dont_save = find_qml_descendant(root_win, "unsavedDontSaveButton");
+        ASSERT_NE(unsaved_dialog, nullptr);
+        ASSERT_NE(unsaved_cancel, nullptr);
+        ASSERT_NE(unsaved_dont_save, nullptr);
+
+        ASSERT_TRUE(QMetaObject::invokeMethod(root_win, "requestNewProject", Qt::DirectConnection));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        ASSERT_TRUE(unsaved_dialog->property("visible").toBool());
+        click_item(unsaved_cancel);
+        EXPECT_TRUE(timeline_model->isDirty());
+        EXPECT_TRUE(std::filesystem::exists(stale_proj_sidecar));
+
+        // Now Close -> Don't Save: discards active sidecar AND keeps unrelated_sidecar!
+        EXPECT_FALSE(root_win->close());
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        ASSERT_TRUE(unsaved_dialog->property("visible").toBool());
+        click_item(unsaved_dont_save);
+        pump_events_until([root_win]() { return !root_win->isVisible(); }, 1000);
+        EXPECT_FALSE(root_win->isVisible());
+        EXPECT_FALSE(std::filesystem::exists(stale_proj_sidecar));
+        EXPECT_TRUE(std::filesystem::exists(unrelated_sidecar));
+
+        EXPECT_TRUE(qml_warnings.isEmpty())
+            << (qml_warnings.isEmpty() ? "" : qml_warnings.constFirst().toString().toStdString());
+
+        engine.reset();
+        autosave_service->shutdown();
+        playback_service->shutdown();
+        media_pool_model->shutdown();
+        ai_studio_service->shutdown();
+        session->shutdown();
+        frame_hub->shutdown();
+        coordinator->unbind();
+    }
 }
 
 int main(int argc, char** argv) {

@@ -999,6 +999,330 @@ int main(int argc, char* argv[]) {
         engine.shutdown();
     }
 
+    // 11. M1.3C2 Startup Discovery, Safe Restoration, Discard & Post-Save Sequence Fencing Tests
+    {
+        std::cout << "Running M1.3C2 Recovery Workflow & Concurrency Tests..." << std::endl;
+
+        const std::filesystem::path m13c2_root =
+            std::filesystem::current_path() / "test_output" / "m13c2_core";
+        std::error_code rm_ec;
+        std::filesystem::remove_all(m13c2_root, rm_ec);
+        const std::filesystem::path rec_dir = m13c2_root / "recovery";
+        std::filesystem::create_directories(rec_dir);
+
+        ave::ProjectAutosaveEngine engine(rec_dir);
+
+        // 11a. Multiple untitled recovery records + full timeline/mediapool restore fidelity + restored dirty invariant
+        ave::Project p_multi_1("Multi Session A");
+        ave::MediaAsset a1("asset-r1", m13c2_root / "clip_a.mp4", "Clip Alpha", 1024, "mp4", ave::Rational{10, 1}, {});
+        p_multi_1.media_pool_mut().register_asset(a1);
+        const std::string bin_id = p_multi_1.media_pool_mut().create_bin("Selects");
+        const std::string pool_clip_id = p_multi_1.media_pool_mut().create_clip("asset-r1", bin_id, "Alpha Clip");
+        p_multi_1.media_pool_mut().set_clip_source_range(
+            pool_clip_id, ave::Rational{1, 1}, ave::Rational{3, 1});
+        p_multi_1.media_pool_mut().set_clip_color_tag(pool_clip_id, "Blue");
+        const std::string v1_m1 = p_multi_1.timeline().video_tracks()[0].id();
+        ave::TimelineItem clip_m1(
+            "rec-clip-1", "ref-r1", "asset-r1", "Rec Shot 1",
+            ave::Rational{2, 1}, ave::Rational{4, 1}, ave::Rational{1, 1});
+        clip_m1.set_transform(15.5f, -8.25f);
+        clip_m1.set_scale(1.25f, 1.25f);
+        clip_m1.set_rotation(12.0f);
+        clip_m1.set_opacity(0.75f);
+        ASSERT_EQ(p_multi_1.execute_command(std::make_unique<ave::InsertClipCommand>(v1_m1, clip_m1)).status,
+                  ave::CommandStatus::Success);
+        ASSERT_TRUE(p_multi_1.is_dirty());
+
+        const auto cap_m1 = ave::ProjectAutosaveEngine::capture_snapshot_if_dirty(
+            p_multi_1, rec_dir, engine.allocate_capture_sequence());
+        ASSERT_TRUE(cap_m1.has_value());
+        ASSERT_TRUE(engine.commit_capture_blocking(*cap_m1).succeeded);
+
+        ave::Project p_multi_2("Multi Session B");
+        p_multi_2.set_name("Multi Session B Edited");
+        const auto cap_m2 = ave::ProjectAutosaveEngine::capture_snapshot_if_dirty(
+            p_multi_2, rec_dir, engine.allocate_capture_sequence());
+        ASSERT_TRUE(cap_m2.has_value());
+        ASSERT_TRUE(engine.commit_capture_blocking(*cap_m2).succeeded);
+
+        // Discovery sees both untitled records without scanning unrelated dirs
+        const auto scanned = ave::RecoveryInspector::scan_recovery_directory(rec_dir);
+        ASSERT_EQ(scanned.size(), 2u);
+
+        // Selective discard deletes ONLY p_multi_2, keeping p_multi_1 intact
+        const auto discard_one = engine.discard_recovery_file(cap_m2->target_recovery_path);
+        ASSERT_TRUE(discard_one.succeeded);
+        ASSERT_EQ(discard_one.removed_count, 1u);
+        ASSERT_FALSE(std::filesystem::exists(cap_m2->target_recovery_path));
+        ASSERT_TRUE(std::filesystem::exists(cap_m1->target_recovery_path));
+
+        // Restore untitled project and verify full fidelity + dirty state invariant
+        ave::Project restored_untitled = ave::RecoveryInspector::load_recovered_project(
+            cap_m1->target_recovery_path);
+        ASSERT_TRUE(restored_untitled.is_dirty());
+        ASSERT_TRUE(restored_untitled.is_restored_from_recovery());
+        ASSERT_TRUE(restored_untitled.file_path().empty());
+        ASSERT_EQ(restored_untitled.id(), p_multi_1.id());
+        ASSERT_EQ(restored_untitled.media_pool().assets().size(), 1u);
+        ASSERT_TRUE(restored_untitled.media_pool().find_asset("asset-r1") != nullptr);
+        ASSERT_TRUE(restored_untitled.media_pool().find_bin(bin_id) != nullptr);
+        ASSERT_TRUE(restored_untitled.media_pool().find_clip(pool_clip_id) != nullptr);
+        ASSERT_EQ(restored_untitled.media_pool().find_clip(pool_clip_id)->color_tag(), "Blue");
+        const ave::TimelineItem* r_item = restored_untitled.timeline().find_item("rec-clip-1");
+        ASSERT_TRUE(r_item != nullptr);
+        ASSERT_TRUE(std::abs(r_item->transform_x() - 15.5f) < 1e-4f);
+        ASSERT_TRUE(std::abs(r_item->transform_y() - (-8.25f)) < 1e-4f);
+        ASSERT_TRUE(std::abs(r_item->scale_x() - 1.25f) < 1e-4f);
+        ASSERT_TRUE(std::abs(r_item->rotation() - 12.0f) < 1e-4f);
+        ASSERT_TRUE(std::abs(r_item->opacity() - 0.75f) < 1e-4f);
+
+        // Restored project supports further edits and autosaves before explicit Save
+        restored_untitled.set_name("Restored Then Edited");
+        ASSERT_TRUE(restored_untitled.is_dirty());
+        const auto cap_after_restore = ave::ProjectAutosaveEngine::capture_snapshot_if_dirty(
+            restored_untitled, rec_dir, engine.allocate_capture_sequence());
+        ASSERT_TRUE(cap_after_restore.has_value());
+        ASSERT_TRUE(engine.commit_capture_blocking(*cap_after_restore).succeeded);
+
+        const std::filesystem::path saved_from_restored = m13c2_root / "restored_saved.aveproj";
+        ASSERT_TRUE(restored_untitled.save(saved_from_restored));
+        ASSERT_FALSE(restored_untitled.is_dirty());
+        ASSERT_FALSE(restored_untitled.is_restored_from_recovery());
+
+        const auto clean_after_untitled_save = engine.cleanup_after_save(
+            restored_untitled.id(),
+            saved_from_restored,
+            {},
+            restored_untitled.saved_mutation_revision());
+        ASSERT_TRUE(clean_after_untitled_save.succeeded);
+        ASSERT_FALSE(std::filesystem::exists(cap_m1->target_recovery_path));
+
+        // 11b. Named project restore leaves original .aveproj untouched; Stale, Corrupt & identity mismatch rejected
+        const std::filesystem::path named_proj_path = m13c2_root / "named_project.aveproj";
+        ave::Project named_proj("Named Original");
+        ASSERT_TRUE(named_proj.save(named_proj_path));
+        std::string orig_disk_bytes;
+        {
+            std::ifstream ifs(named_proj_path, std::ios::in | std::ios::binary);
+            std::ostringstream ss;
+            ss << ifs.rdbuf();
+            orig_disk_bytes = ss.str();
+        }
+
+        named_proj.set_name("Named Unsaved Crash");
+        const auto cap_named = ave::ProjectAutosaveEngine::capture_snapshot_if_dirty(
+            named_proj, rec_dir, engine.allocate_capture_sequence());
+        ASSERT_TRUE(cap_named.has_value());
+        ASSERT_TRUE(engine.commit_capture_blocking(*cap_named).succeeded);
+
+        const ave::RecoveryInfo named_valid = ave::RecoveryInspector::inspect_file(
+            cap_named->target_recovery_path, named_proj_path);
+        ASSERT_EQ(named_valid.status, ave::RecoveryStatus::Valid);
+
+        // Wrong expected_project_id or different target project file ID -> rejected
+        bool threw_mismatch = false;
+        try {
+            (void)ave::RecoveryInspector::load_recovered_project(
+                cap_named->target_recovery_path, named_proj_path, "wrong-project-id");
+        } catch (const std::runtime_error&) {
+            threw_mismatch = true;
+        }
+        ASSERT_TRUE(threw_mismatch);
+
+        const std::filesystem::path other_proj_path = m13c2_root / "other_proj.aveproj";
+        ave::Project other_proj("Other Distinct Project");
+        ASSERT_TRUE(other_proj.save(other_proj_path));
+        const ave::RecoveryInfo mismatch_info = ave::RecoveryInspector::inspect_file(
+            cap_named->target_recovery_path, other_proj_path);
+        ASSERT_EQ(mismatch_info.status, ave::RecoveryStatus::Corrupt);
+
+        // Restore named recovery -> must keep named_proj_path untouched and mark restored project dirty
+        ave::Project restored_named = ave::RecoveryInspector::load_recovered_project(
+            cap_named->target_recovery_path, named_proj_path);
+        ASSERT_TRUE(restored_named.is_dirty());
+        ASSERT_EQ(restored_named.name(), "Named Unsaved Crash");
+        ASSERT_EQ(restored_named.file_path(), named_proj_path);
+        std::string after_restore_disk_bytes;
+        {
+            std::ifstream ifs(named_proj_path, std::ios::in | std::ios::binary);
+            std::ostringstream ss;
+            ss << ifs.rdbuf();
+            after_restore_disk_bytes = ss.str();
+        }
+        ASSERT_EQ(after_restore_disk_bytes, orig_disk_bytes);
+
+        // Truncated/corrupt recovery file is classified Corrupt and rejected by loader
+        const std::filesystem::path corrupt_sidecar = rec_dir / "corrupt_unit.autosave";
+        {
+            std::ofstream ofs(corrupt_sidecar, std::ios::out | std::ios::binary | std::ios::trunc);
+            ofs << "{\"recovery_format_version\":1,\"project_id\":\"broken\",\"record_sha256\":\"bad\"";
+        }
+        ASSERT_EQ(ave::RecoveryInspector::inspect_file(corrupt_sidecar).status, ave::RecoveryStatus::Corrupt);
+        bool threw_corrupt = false;
+        try {
+            (void)ave::RecoveryInspector::load_recovered_project(corrupt_sidecar);
+        } catch (const std::runtime_error&) {
+            threw_corrupt = true;
+        }
+        ASSERT_TRUE(threw_corrupt);
+
+        // Stale recovery file (original saved newer than snapshot) is classified Stale and rejected by loader
+        ave::Project stale_base("Stale Base");
+        const std::filesystem::path stale_proj_path = m13c2_root / "stale_base.aveproj";
+        ASSERT_TRUE(stale_base.save(stale_proj_path));
+        stale_base.set_name("Stale Snapshot State");
+        const auto cap_stale = ave::ProjectAutosaveEngine::capture_snapshot_if_dirty(
+            stale_base, rec_dir, engine.allocate_capture_sequence());
+        ASSERT_TRUE(cap_stale.has_value());
+        ASSERT_TRUE(engine.commit_capture_blocking(*cap_stale).succeeded);
+        stale_base.set_name("Newer Saved On Disk");
+        ASSERT_TRUE(stale_base.save(stale_proj_path));
+        ASSERT_EQ(ave::RecoveryInspector::inspect_file(cap_stale->target_recovery_path, stale_proj_path).status,
+                  ave::RecoveryStatus::Stale);
+        bool threw_stale = false;
+        try {
+            (void)ave::RecoveryInspector::load_recovered_project(
+                cap_stale->target_recovery_path, stale_proj_path);
+        } catch (const std::runtime_error&) {
+            threw_stale = true;
+        }
+        ASSERT_TRUE(threw_stale);
+
+        // 11c. cleanup_after_save preserves newer revisions and unrelated project IDs
+        ave::Project keep_other("Keep Unrelated");
+        keep_other.set_name("Keep Unrelated Dirty");
+        const auto cap_unrelated = ave::ProjectAutosaveEngine::capture_snapshot_if_dirty(
+            keep_other, rec_dir, engine.allocate_capture_sequence());
+        ASSERT_TRUE(cap_unrelated.has_value());
+        ASSERT_TRUE(engine.commit_capture_blocking(*cap_unrelated).succeeded);
+
+        const std::filesystem::path newer_target_path = m13c2_root / "rev_check.aveproj";
+        ave::Project rev_proj("Rev Check");
+        rev_proj.set_name("Rev Check Edited");
+        ASSERT_TRUE(rev_proj.save(newer_target_path));
+        rev_proj.set_name("Rev Check v2"); // semantic_mutation_revision == 2, saved == 1
+        const auto cap_newer = ave::ProjectAutosaveEngine::capture_snapshot_if_dirty(
+            rev_proj, rec_dir, engine.allocate_capture_sequence());
+        ASSERT_TRUE(cap_newer.has_value());
+        ASSERT_TRUE(cap_newer->snapshot_revision > rev_proj.saved_mutation_revision());
+        ASSERT_TRUE(engine.commit_capture_blocking(*cap_newer).succeeded);
+
+        const auto cleanup_preserve = engine.cleanup_after_save(
+            rev_proj.id(), newer_target_path, {}, rev_proj.saved_mutation_revision());
+        ASSERT_TRUE(cleanup_preserve.succeeded);
+        ASSERT_EQ(cleanup_preserve.removed_count, 0u);
+        ASSERT_EQ(cleanup_preserve.preserved_count, 1u);
+        ASSERT_TRUE(std::filesystem::exists(cap_newer->target_recovery_path));
+        ASSERT_TRUE(std::filesystem::exists(cap_unrelated->target_recovery_path));
+
+        // 11d. Concurrency fence #18 & #19:
+        // An in-flight autosave paused before rename MUST NOT recreate sidecar after discard or save!
+        {
+            ave::ProjectAutosaveEngine fence_engine(rec_dir);
+            ave::Project fence_proj("Fence Test Project");
+            const std::filesystem::path fence_proj_path = m13c2_root / "fenced.aveproj";
+            ASSERT_TRUE(fence_proj.save(fence_proj_path));
+            fence_proj.set_name("Fence Dirty 1");
+
+            const uint64_t stale_seq = fence_engine.allocate_capture_sequence();
+            const auto stale_cap = ave::ProjectAutosaveEngine::capture_snapshot_if_dirty(
+                fence_proj, rec_dir, stale_seq);
+            ASSERT_TRUE(stale_cap.has_value());
+
+            std::mutex m;
+            std::condition_variable cv;
+            bool paused = false;
+            bool resume = false;
+            fence_engine.set_pre_replace_hook_for_test([&](const ave::AutosaveCapture& c) {
+                if (c.capture_seq == stale_seq) {
+                    std::unique_lock<std::mutex> lk(m);
+                    paused = true;
+                    cv.notify_all();
+                    cv.wait(lk, [&]() { return resume; });
+                }
+            });
+
+            ave::AutosaveWriteResult stalled_res;
+            std::thread writer([&]() {
+                stalled_res = fence_engine.commit_capture_blocking(*stale_cap);
+            });
+            {
+                std::unique_lock<std::mutex> lk(m);
+                ASSERT_TRUE(cv.wait_for(lk, std::chrono::seconds(3), [&]() { return paused; }));
+            }
+
+            // Simulate user clicking "Don't Save" -> discard_for_project while autosave is in flight
+            const auto discard_race = fence_engine.discard_for_project(fence_proj.id(), fence_proj_path);
+            ASSERT_TRUE(discard_race.succeeded);
+
+            {
+                std::lock_guard<std::mutex> lk(m);
+                resume = true;
+            }
+            cv.notify_all();
+            writer.join();
+
+            ASSERT_FALSE(stalled_res.succeeded);
+            ASSERT_TRUE(stalled_res.superseded);
+            ASSERT_FALSE(std::filesystem::exists(stale_cap->target_recovery_path));
+
+            // Repeat for Save cleanup fencing: paused autosave before rename cannot recreate sidecar after save
+            fence_proj.set_name("Fence Dirty 2");
+            const uint64_t save_race_seq = fence_engine.allocate_capture_sequence();
+            const auto save_race_cap = ave::ProjectAutosaveEngine::capture_snapshot_if_dirty(
+                fence_proj, rec_dir, save_race_seq);
+            ASSERT_TRUE(save_race_cap.has_value());
+
+            paused = false;
+            resume = false;
+            fence_engine.set_pre_replace_hook_for_test([&](const ave::AutosaveCapture& c) {
+                if (c.capture_seq == save_race_seq) {
+                    std::unique_lock<std::mutex> lk(m);
+                    paused = true;
+                    cv.notify_all();
+                    cv.wait(lk, [&]() { return resume; });
+                }
+            });
+
+            ave::AutosaveWriteResult save_race_res;
+            std::thread writer2([&]() {
+                save_race_res = fence_engine.commit_capture_blocking(*save_race_cap);
+            });
+            {
+                std::unique_lock<std::mutex> lk(m);
+                ASSERT_TRUE(cv.wait_for(lk, std::chrono::seconds(3), [&]() { return paused; }));
+            }
+
+            ASSERT_TRUE(fence_proj.save(fence_proj_path));
+            const auto save_clean = fence_engine.cleanup_after_save(
+                fence_proj.id(), fence_proj_path, {}, fence_proj.saved_mutation_revision());
+            ASSERT_TRUE(save_clean.succeeded);
+
+            {
+                std::lock_guard<std::mutex> lk(m);
+                resume = true;
+            }
+            cv.notify_all();
+            writer2.join();
+
+            ASSERT_FALSE(save_race_res.succeeded);
+            ASSERT_TRUE(save_race_res.superseded);
+            ASSERT_FALSE(std::filesystem::exists(save_race_cap->target_recovery_path));
+
+            // Later edits after fence still allocate higher sequences and succeed
+            fence_proj.set_name("Fence Dirty 3 After Save");
+            fence_engine.set_pre_replace_hook_for_test({});
+            const uint64_t fresh_seq = fence_engine.allocate_capture_sequence();
+            const auto fresh_cap = ave::ProjectAutosaveEngine::capture_snapshot_if_dirty(
+                fence_proj, rec_dir, fresh_seq);
+            ASSERT_TRUE(fresh_cap.has_value());
+            ASSERT_TRUE(fence_engine.commit_capture_blocking(*fresh_cap).succeeded);
+            ASSERT_TRUE(std::filesystem::exists(fresh_cap->target_recovery_path));
+        }
+
+        engine.shutdown();
+    }
+
     // Clean up temporary files
     std::error_code ec;
     std::filesystem::remove_all(std::filesystem::current_path() / "test_output", ec);
