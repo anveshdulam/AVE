@@ -124,6 +124,13 @@ CommandResult MoveClipCommand::validate(const Timeline& timeline, const MediaPoo
     const Track* dst_track = timeline.find_track(dst_track_id_);
     if (!dst_track) return CommandResult::failure(CommandStatus::FailedPrecondition, "Destination track not found: " + dst_track_id_);
 
+    if (src_track->type() != dst_track->type()) {
+        return CommandResult::failure(
+            CommandStatus::FailedPrecondition,
+            "Incompatible track types: cannot move " + to_string(src_track->type()) +
+            " clip to " + to_string(dst_track->type()) + " track");
+    }
+
     if (new_timeline_in_ < Rational{0, 1}) {
         return CommandResult::failure(CommandStatus::FailedPrecondition, "New timeline in cannot be negative");
     }

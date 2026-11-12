@@ -130,6 +130,63 @@ int main() {
         ASSERT_EQ(right->source_out(), ave::Rational(10, 1));
     }
 
+    // 4.1 Blade Cut metadata & speed preservation
+    {
+        ave::Timeline tl("tl-split-meta", "Split Metadata Sequence", ave::Rational{24, 1});
+        const std::string v1_id = tl.video_tracks()[0].id();
+        auto* v1_mut = tl.find_track_mut(v1_id);
+        ASSERT_TRUE(v1_mut != nullptr);
+
+        ave::TimelineItem styled("clip-styled", "clip-ref-s", "asset-s", "Styled Shot",
+                                 ave::Rational{1, 1}, ave::Rational{6, 1},
+                                 ave::Rational{10, 1}, ave::Rational{2, 1});
+        styled.set_transform(42.5f, -18.25f);
+        styled.set_scale(1.75f, 0.6f);
+        styled.set_rotation(-33.5f);
+        styled.set_anchor(0.2f, 0.8f);
+        styled.set_opacity(0.65f);
+        styled.set_blend_mode("Multiply");
+        styled.set_enabled(false);
+        ASSERT_TRUE(v1_mut->add_item(std::move(styled)));
+
+        auto [left_id, right_id] = tl.split_item(v1_id, "clip-styled", ave::Rational{3, 1});
+        const auto* track = tl.find_track(v1_id);
+        ASSERT_TRUE(track != nullptr);
+        ASSERT_EQ(track->items().size(), 2);
+
+        const auto* left = track->find_item(left_id);
+        const auto* right = track->find_item(right_id);
+        ASSERT_TRUE(left != nullptr);
+        ASSERT_TRUE(right != nullptr);
+
+        ASSERT_EQ(left->timeline_in(), ave::Rational(1, 1));
+        ASSERT_EQ(left->duration(), ave::Rational(2, 1));
+        ASSERT_EQ(left->source_in(), ave::Rational(10, 1));
+        ASSERT_EQ(left->source_out(), ave::Rational(14, 1));
+
+        ASSERT_EQ(right->timeline_in(), ave::Rational(3, 1));
+        ASSERT_EQ(right->duration(), ave::Rational(4, 1));
+        ASSERT_EQ(right->source_in(), ave::Rational(14, 1));
+        ASSERT_EQ(right->source_out(), ave::Rational(22, 1));
+
+        for (const auto* half : {left, right}) {
+            ASSERT_EQ(half->clip_id(), "clip-ref-s");
+            ASSERT_EQ(half->asset_id(), "asset-s");
+            ASSERT_EQ(half->name(), "Styled Shot");
+            ASSERT_EQ(half->speed(), ave::Rational(2, 1));
+            ASSERT_EQ(half->enabled(), false);
+            ASSERT_EQ(half->transform_x(), 42.5f);
+            ASSERT_EQ(half->transform_y(), -18.25f);
+            ASSERT_EQ(half->scale_x(), 1.75f);
+            ASSERT_EQ(half->scale_y(), 0.6f);
+            ASSERT_EQ(half->rotation(), -33.5f);
+            ASSERT_EQ(half->anchor_x(), 0.2f);
+            ASSERT_EQ(half->anchor_y(), 0.8f);
+            ASSERT_TRUE(std::abs(half->opacity() - 0.65f) < 0.0001f);
+            ASSERT_EQ(half->blend_mode(), "Multiply");
+        }
+    }
+
     // 5. JSON roundtrip serialization
     {
         ave::Timeline tl("tl-json", "JSON Test", ave::Rational{30, 1});

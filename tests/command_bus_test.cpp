@@ -270,6 +270,127 @@ int main() {
     ASSERT_TRUE(listener_notifications > 10);
     std::cout << "  Total change notifications triggered: " << listener_notifications << std::endl;
 
+    // 10. M1.1A Regression: SplitClipCommand preserves all attributes across undo/redo
+    std::cout << "  Testing M1.1A SplitClipCommand metadata preservation + undo/redo..." << std::endl;
+    {
+        ave::TimelineItem styled("styled-c1", "clip-ref-styled", "asset-styled", "Styled Split",
+                                 ave::Rational{10, 1}, ave::Rational{4, 1},
+                                 ave::Rational{4, 1}, ave::Rational{3, 2});
+        styled.set_transform(25.0f, -12.5f);
+        styled.set_scale(1.25f, 0.8f);
+        styled.set_rotation(15.0f);
+        styled.set_anchor(0.3f, 0.7f);
+        styled.set_opacity(0.72f);
+        styled.set_blend_mode("Add");
+        styled.set_enabled(false);
+
+        auto ins_styled = std::make_unique<ave::InsertClipCommand>(v1_id, styled);
+        ASSERT_TRUE(history.execute(std::move(ins_styled), timeline, pool).is_success());
+
+        auto split_styled = std::make_unique<ave::SplitClipCommand>(v1_id, "styled-c1", ave::Rational{12, 1});
+        auto* split_raw = split_styled.get();
+        auto res_split_styled = history.execute(std::move(split_styled), timeline, pool);
+        ASSERT_TRUE(res_split_styled.is_success());
+
+        auto verify_split_halves = [&]() -> bool {
+            const auto* trk = timeline.find_track(v1_id);
+            if (!trk) return false;
+            const auto* left = trk->find_item(split_raw->left_item_id());
+            const auto* right = trk->find_item(split_raw->right_item_id());
+            if (!left || !right) return false;
+            if (left->timeline_in() != ave::Rational(10, 1) || left->duration() != ave::Rational(2, 1)) return false;
+            if (left->source_in() != ave::Rational(4, 1)) return false;
+            if (right->timeline_in() != ave::Rational(12, 1) || right->duration() != ave::Rational(2, 1)) return false;
+            if (right->source_in() != ave::Rational(7, 1)) return false;
+            for (const auto* half : {left, right}) {
+                if (half->clip_id() != "clip-ref-styled" || half->asset_id() != "asset-styled") return false;
+                if (half->name() != "Styled Split" || half->speed() != ave::Rational(3, 2)) return false;
+                if (half->enabled()) return false;
+                if (half->transform_x() != 25.0f || half->transform_y() != -12.5f) return false;
+                if (half->scale_x() != 1.25f || half->scale_y() != 0.8f) return false;
+                if (half->rotation() != 15.0f) return false;
+                if (half->anchor_x() != 0.3f || half->anchor_y() != 0.7f) return false;
+                if (half->opacity() != 0.72f) return false;
+                if (half->blend_mode() != "Add") return false;
+            }
+            return true;
+        };
+
+        ASSERT_TRUE(verify_split_halves());
+
+        // Undo restores original single clip cleanly
+        ASSERT_TRUE(history.undo(timeline, pool).is_success());
+        const auto* restored_orig = timeline.find_track(v1_id)->find_item("styled-c1");
+        ASSERT_TRUE(restored_orig != nullptr);
+        ASSERT_EQ(restored_orig->duration(), ave::Rational(4, 1));
+        ASSERT_EQ(restored_orig->source_in(), ave::Rational(4, 1));
+        ASSERT_EQ(restored_orig->blend_mode(), "Add");
+        ASSERT_FALSE(restored_orig->enabled());
+
+        // Redo restores both halves with all preserved properties
+        ASSERT_TRUE(history.redo(timeline, pool).is_success());
+        ASSERT_TRUE(verify_split_halves());
+    }
+
+    // 11. M1.1A Regression: Track-type validation on MoveClipCommand
+    std::cout << "  Testing M1.1A MoveClipCommand track-type validation..." << std::endl;
+    {
+        timeline.add_audio_track("A2");
+        const std::string a1_id = timeline.audio_tracks()[0].id();
+        const std::string a2_id = timeline.audio_tracks()[1].id();
+
+        ave::TimelineItem vid_clip("mv-v1", "c-mv-v", "asset-v", "Video For Move",
+                                   ave::Rational{30, 1}, ave::Rational{3, 1}, ave::Rational{0, 1});
+        ave::TimelineItem aud_clip("mv-a1", "c-mv-a", "asset-a", "Audio For Move",
+                                   ave::Rational{30, 1}, ave::Rational{3, 1}, ave::Rational{0, 1});
+        ASSERT_TRUE(history.execute(std::make_unique<ave::InsertClipCommand>(v1_id, vid_clip), timeline, pool).is_success());
+        ASSERT_TRUE(history.execute(std::make_unique<ave::InsertClipCommand>(a1_id, aud_clip), timeline, pool).is_success());
+
+        const size_t undo_before_reject = history.undo_count();
+        const size_t v1_count_before = timeline.find_track(v1_id)->items().size();
+        const size_t a1_count_before = timeline.find_track(a1_id)->items().size();
+
+        // Video -> Audio rejected
+        auto bad_v_to_a = std::make_unique<ave::MoveClipCommand>(v1_id, "mv-v1", a1_id, ave::Rational{35, 1});
+        auto res_v_to_a = history.execute(std::move(bad_v_to_a), timeline, pool);
+        ASSERT_FALSE(res_v_to_a.is_success());
+        ASSERT_EQ(res_v_to_a.status, ave::CommandStatus::FailedPrecondition);
+        ASSERT_TRUE(res_v_to_a.message.find("video") != std::string::npos);
+        ASSERT_TRUE(res_v_to_a.message.find("audio") != std::string::npos);
+        ASSERT_EQ(timeline.find_track(v1_id)->items().size(), v1_count_before);
+        ASSERT_EQ(timeline.find_track(a1_id)->items().size(), a1_count_before);
+        ASSERT_EQ(timeline.find_track(v1_id)->find_item("mv-v1")->timeline_in(), ave::Rational(30, 1));
+        ASSERT_EQ(history.undo_count(), undo_before_reject);
+
+        // Audio -> Video rejected
+        auto bad_a_to_v = std::make_unique<ave::MoveClipCommand>(a1_id, "mv-a1", v1_id, ave::Rational{35, 1});
+        auto res_a_to_v = history.execute(std::move(bad_a_to_v), timeline, pool);
+        ASSERT_FALSE(res_a_to_v.is_success());
+        ASSERT_EQ(res_a_to_v.status, ave::CommandStatus::FailedPrecondition);
+        ASSERT_TRUE(res_a_to_v.message.find("audio") != std::string::npos);
+        ASSERT_TRUE(res_a_to_v.message.find("video") != std::string::npos);
+        ASSERT_EQ(timeline.find_track(v1_id)->items().size(), v1_count_before);
+        ASSERT_EQ(timeline.find_track(a1_id)->items().size(), a1_count_before);
+        ASSERT_EQ(timeline.find_track(a1_id)->find_item("mv-a1")->timeline_in(), ave::Rational(30, 1));
+        ASSERT_EQ(history.undo_count(), undo_before_reject);
+
+        // Video -> Video succeeds & undoes cleanly
+        auto good_v_to_v = std::make_unique<ave::MoveClipCommand>(v1_id, "mv-v1", v2_id, ave::Rational{35, 1});
+        ASSERT_TRUE(history.execute(std::move(good_v_to_v), timeline, pool).is_success());
+        ASSERT_TRUE(timeline.find_track(v2_id)->find_item("mv-v1") != nullptr);
+        ASSERT_EQ(timeline.find_track(v2_id)->find_item("mv-v1")->timeline_in(), ave::Rational(35, 1));
+        ASSERT_TRUE(history.undo(timeline, pool).is_success());
+        ASSERT_TRUE(timeline.find_track(v1_id)->find_item("mv-v1") != nullptr);
+
+        // Audio -> Audio succeeds & undoes cleanly
+        auto good_a_to_a = std::make_unique<ave::MoveClipCommand>(a1_id, "mv-a1", a2_id, ave::Rational{35, 1});
+        ASSERT_TRUE(history.execute(std::move(good_a_to_a), timeline, pool).is_success());
+        ASSERT_TRUE(timeline.find_track(a2_id)->find_item("mv-a1") != nullptr);
+        ASSERT_EQ(timeline.find_track(a2_id)->find_item("mv-a1")->timeline_in(), ave::Rational(35, 1));
+        ASSERT_TRUE(history.undo(timeline, pool).is_success());
+        ASSERT_TRUE(timeline.find_track(a1_id)->find_item("mv-a1") != nullptr);
+    }
+
     std::cout << "All Command Bus & Undo/Redo Engine Tests PASSED!" << std::endl;
     return 0;
 }

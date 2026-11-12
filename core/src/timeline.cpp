@@ -325,6 +325,18 @@ std::pair<std::string, std::string> Timeline::split_item(const std::string& trac
         orig->speed()
     );
 
+    auto copy_attributes = [](const TimelineItem& src, TimelineItem& dst) {
+        dst.set_enabled(src.enabled());
+        dst.set_transform(src.transform_x(), src.transform_y());
+        dst.set_scale(src.scale_x(), src.scale_y());
+        dst.set_rotation(src.rotation());
+        dst.set_anchor(src.anchor_x(), src.anchor_y());
+        dst.set_opacity(src.opacity());
+        dst.set_blend_mode(src.blend_mode());
+    };
+    copy_attributes(*orig, left_item);
+    copy_attributes(*orig, right_item);
+
     std::string left_id = left_item.id();
     std::string right_id = right_item.id();
 
